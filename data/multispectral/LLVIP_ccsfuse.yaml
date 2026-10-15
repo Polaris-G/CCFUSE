@@ -1,0 +1,14 @@
+# LLVIP (RGB-IR, strictly aligned), converted by tools/prepare_llvip.py
+# 12,025 train / 3,463 test pairs, single class, shared annotations on both sides.
+# LLVIP has no val split: validation and final evaluation both use test (as in the paper).
+
+train_rgb: D:/CCSFuse/datasets/LLVIP/rgb/images/train
+val_rgb: D:/CCSFuse/datasets/LLVIP/rgb/images/test
+train_ir: D:/CCSFuse/datasets/LLVIP/ir/images/train
+val_ir: D:/CCSFuse/datasets/LLVIP/ir/images/test
+
+# number of classes
+nc: 1
+
+# class names
+names: ['person']

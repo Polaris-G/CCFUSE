@@ -1,0 +1,22 @@
+# Pinned environment for CCSFuse reproduction (Windows, Python 3.10, RTX 3070 Ti 8GB).
+# torch/torchvision are installed separately from local cu124 wheels (see README / setup notes):
+#   torch==2.5.1+cu124  torchvision==0.20.1+cu124
+# Fast source (download.pytorch.org is slow/unstable here): https://mirrors.nju.edu.cn/pytorch/whl/cu124/
+# Official SHA256 (from download.pytorch.org/whl/cu124/<pkg>/):
+#   6f99d8459369cfd6661c2aee14787592fe50156a33faf9ef643ba04e42d6543f  torch-2.5.1+cu124-cp310-cp310-win_amd64.whl
+#   b18c35fad1199d027f1b4a7a7027bbf8ab5e8d1dc6feb72431c2efaa58551c64  torchvision-0.20.1+cu124-cp310-cp310-win_amd64.whl
+# Install:
+#   python -m pip install <torch.whl> <torchvision.whl> -r requirements-ccsfuse.txt --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple
+# numpy must stay < 1.24: the CFT/YOLOv5-v5.0 codebase uses np.int.
+numpy==1.23.5
+scipy==1.10.1
+opencv-python==4.8.1.78
+matplotlib==3.7.5
+pandas==2.0.3
+seaborn==0.12.2
+Pillow==10.4.0
+PyYAML==6.0.2
+tqdm==4.66.5
+tensorboard==2.14.0
+thop==0.1.1.post2209072238
+pycocotools==2.0.8

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+datasets/
+weights/*.pt
+runs/
+*.cache

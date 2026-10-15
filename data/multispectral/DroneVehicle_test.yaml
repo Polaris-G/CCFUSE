@@ -1,0 +1,13 @@
+# DroneVehicle test split for final evaluation (paper reports on test).
+# CFT's test.py only reads val_rgb / val_ir, so they point at the test split here.
+
+train_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/train
+val_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/test
+train_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/train
+val_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/test
+
+# number of classes
+nc: 5
+
+# class names (order of paper Table I)
+names: ['car', 'truck', 'freight car', 'bus', 'van']
