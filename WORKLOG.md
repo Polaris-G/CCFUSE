@@ -297,3 +297,164 @@ CFT 原有的、受 git 跟踪的文件**均未修改**（`git status` 中只有
 3. **C 盘 pip 缓存目录没有完全清空**。会话中我说已经清理干净，实际还剩 `C:\Users\bzp02\AppData\Local\pip\cache\selfcheck\` 下的 1 个文件（不到 1 KB，写入时间 2026-10-14 02:01）。这是 pip 记录版本检查的文件，`pip cache purge` 不会删除它，不影响使用。
 4. **DroneVehicle 转换后的大小**：会话中报告为 6.75 GB，现在是 6.79 GB。多出的部分是之后运行加载器检查时生成的 6 个 `.cache` 文件，约 34 MB。
 5. **`D:\CCSFuse_wheels` 仍然存在**，与会话记录一致，仍是待办，不算不一致，只是提醒。
+
+---
+
+# 会话 2（2026-10-15）
+
+会话时间：2026-10-15 约 02:16 – 04:05。时间取自本机时钟，与会话 1 相同；git 和 shell 显示的时区为 -0400。按时间顺序记录，数字均来自命令输出。
+
+## 1. 读方案，核实开工前的四项（02:16 – 02:21）
+
+- **做了什么**：
+  - 读了 CCSFuse_复现方案.md、CLAUDE.md、WORKLOG.md；
+  - 阅读 CFT 的 train.py（`train_rgb_ir`）、models\yolo_test.py、utils\datasets.py；
+  - 写了两个只读探查脚本，放在会话临时目录：`probe_transfer.py`、`probe_aug.py`。
+- **结果**：
+  1. **预训练权重**：train.py 实际导入的是 models\yolo_test.py 的 Model，yaml 中 `from: -4` 表示读 IR 输入。CFT 的 intersect_dicts 按键名匹配，结果 Transferred 306/812：RGB 主干 306/306，**IR 主干 0/306**，neck 0/200。原因是 IR 主干的键 `model.10`–`model.19` 在 COCO 权重中属于 neck，形状对不上。
+  2. **增强**：
+     - Mosaic、仿射变换、翻转对两路同步。实测 Mosaic 加仿射后两路灰色填充区域重合 99.1%（差的部分是图像中本来就有的 114 灰度像素）；fliplr=1 时两路都与镜像后的原图逐像素一致。
+     - HSV 对 IR 也起作用，且两路的随机增益各自独立。实测 IR 亮度被缩放到原来的 0.67–1.11 倍。
+     - **关闭 Mosaic 后没有随机裁剪**：非 Mosaic 分支的 random_perspective 被注释掉了，实测两次读取结果相同。
+  3. **规模**：仓库只有 s 和 l 两个规模的 add 配置。临时建 m 版双流模型（depth 0.67、width 0.75、nc=5）得到 33.43 M 参数，接近论文的 33.50 M。
+  4. **超参**：与论文不一致。原值为 lr0 0.01、momentum 0.937、nesterov True、mosaic 1.0、epochs 100、batch 16、workers 8，梯度累积按 nbs=64 计算。
+- **额外发现**：train.py 的优化器分组只收集模块的 `.weight` 和 `.bias`。CMFC 的 λ 是单独定义的 nn.Parameter，收集不到，第 4–6 步需要处理。
+- 向你汇报后暂停，你回复"继续"。
+
+## 2. 基线提交（02:21 – 02:22）
+
+- **替你做的选择**：
+  - 新建 `.gitignore`，忽略 `__pycache__`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`。原仓库没有 `.gitignore`。
+  - 新建分支 `ccsfuse`，`main` 保持 CFT 原样，便于对比和回退。
+  - 本机 git 没有配置作者身份。我没有修改全局配置，只在这次提交中用 `-c user.name=bzp02 -c user.email=<你的账号邮箱>` 临时指定。
+- **结果**：提交 cba1f45，包含会话 1 新建的文件和三个文档。
+
+## 3. 第 1 步：双流 YOLOv5m Add 基线（02:23 – 02:45）
+
+- **新建配置**：
+  - models\ccsfuse\yolov5m_dual_add.yaml 和 s 版：结构与 CFT 的 add 配置相同，改为 nc=5，新增 `pretrain_map`；
+  - data\hyp.ccsfuse_dronevehicle.yaml。
+- **新建 utils\ccsfuse.py 的 `load_coco_dual_stream`**：把 COCO 第 0–9 层同时复制到 RGB 主干（第 0–9 层）和 IR 主干（第 10–19 层）。
+- **修改 train.py**：
+  - 权重加载：checkpoint 的层数与模型不同时，走新的映射逻辑；
+  - 本地没有权重文件时直接报错；
+  - 新增 `--nbs`、`--hyp-set`、`--pretrain-neck`；
+  - 默认值改为本机配置。
+- **替你做的选择**（论文未给出，均已在 yaml 或代码中标注"推断"）：
+
+  | 项目 | 取值 | 理由 |
+  |---|---|---|
+  | lrf | 0.01 | YOLOv5 余弦退火到 lr0×lrf，视作 One-Cycle |
+  | nesterov | False | 论文只写 SGD，没写 Nesterov |
+  | warmup_bias_lr | 0.01 | 保持 YOLOv5 "bias 初始 lr 是 lr0 的 10 倍"的比例 |
+  | weight_decay、warmup 3 epoch、HSV、translate 0.1、scale 0.5 | YOLOv5 默认值 | — |
+  | neck 是否加载 COCO 权重 | 默认不加载（`--pretrain-neck` 可开启） | 论文只说主干用 COCO 预训练 |
+  | 梯度累积 | `--nbs 12`，即 batch 4 累积 3 步，等效 batch 12 | 对应论文的 6/GPU × 2 |
+  | workers | 2 | Windows |
+  | 1% 子集 | seed 0，180 对；train 和 val 指向同一份 | 用于过拟合检查 |
+
+- **遇到的问题**：
+  1. **CFT 的 bug**：utils\loss.py 第 211 行 `clamp_(0, gain[3] - 1)` 在 torch 2.5 下报 int64/float 类型错误，loss 无法计算。改为 `int(gain[3]) - 1`。
+  2. **编码**：新 yaml 有中文注释，CFT 用 `open()` 读取时没有指定编码，中文 Windows 默认按 GBK 解码。改为 UTF-8 读取，涉及 train.py（hyp 和 data）、test.py、yolo_test.py。
+  3. **我自己脚本的 bug**：tools\check_model.py 中 forward hook 有返回值，替换了模块输出；thop 统计时又复制了 hook。均已修正，不影响训练代码。
+  4. **第一次启动训练失败**：setuptools 84 已删除 pkg_resources，`check_requirements` 导入失败。我没有降级 setuptools，而是让这个检查在导入失败时跳过，因为环境已由 requirements-ccsfuse.txt 和 check_env.py 保证。
+  5. **最后一个 epoch 画图报错**：test.py 把 6 通道图像传给 plot_images。报错发生在后台线程，不中断训练。改为只传 RGB 三通道。
+- **结果**：
+  - check_model.py：
+    - Transferred 612/812（rgb 306/306，ir 306/306），两路 Focus 权重都与 COCO 相同；
+    - P3/P4/P5 为 (4,192,80,80) / (4,384,40,40) / (4,768,20,20)；
+    - Detect 为 (4,3,{80,40,20},{80,40,20},10)；
+    - loss 和梯度均为有限值；
+    - 峰值显存 2.24 GiB（这是 max_memory_allocated）；
+    - 33.43 M 参数，84.32 GFLOPs（按 2×MACs 计）。
+  - 1% 过拟合（30 epoch，batch 4，`--hyp-set warmup_epochs=1 warmup_min_iters=45`）：
+
+    | 运行 | 学习率 | loss | mAP50 | 用时 |
+    |---|---|---|---|---|
+    | runs\train\overfit_add_m | lr0=0.001 | 0.2736→0.1772 | 0.119 | 0.113 h |
+    | runs\train\overfit_add_m_lr01（诊断用） | lr0=0.01 | 0.2749→0.1037 | 0.472，car 类 0.97 | 0.126 h |
+
+    - 训练时显存（日志中的 memory_reserved）为 3.32 GB；日志显示 Scaled weight_decay = 0.0005，Using 2 dataloader workers。
+  - **结论**：管线能够学习。论文 lr 下进展慢，是因为优化步数只有约 450 步。
+- **提交**：87d523e。
+
+## 4. 你在本地验证（约 02:45 – 04:00）
+
+- 你说找不到 tools\check_model.py。
+  - 我核实：文件存在，分支为 ccsfuse，文件已提交。
+  - 推测原因：终端不在 D:\CCSFuse，或资源管理器没有刷新，或切到了 main 分支。
+  - 我给出了先 `cd D:\CCSFuse` 再运行的命令。
+- 你运行后，我看不到你终端的输出，于是在本地重跑了一次，供你对照。结果与上面一致；loss 每次取随机增强样本，这次为 4.311。
+
+## 5. 收尾：核实磁盘状态，更新文档（04:00 – 04:05）
+
+- **核实**：
+  - git 在 ccsfuse 分支，没有未提交的改动；
+  - 没有 python 进程，也没有后台训练；
+  - runs 下两个过拟合目录都有 30 行 results.txt，以及 best.pt 和 last.pt。
+- **新发现**：D:\CCSFuse\.venv（见下文"不一致"第 1 条）。
+- **更新了 CLAUDE.md**，并追加本节。
+
+---
+
+## 本次新建或修改的文件
+
+| 路径 | 类型 | 用途 |
+|---|---|---|
+| `.gitignore` | 新建 | 忽略缓存、数据、权重、runs |
+| `models\ccsfuse\yolov5m_dual_add.yaml` | 新建 | 双流 YOLOv5m + Add 基线，含 pretrain_map |
+| `models\ccsfuse\yolov5s_dual_add.yaml` | 新建 | 同上，s 版，调试用 |
+| `data\hyp.ccsfuse_dronevehicle.yaml` | 新建 | 论文超参，推断项已标注 |
+| `utils\ccsfuse.py` | 新建 | load_coco_dual_stream：COCO 主干权重复制到两路 |
+| `tools\check_model.py` | 新建 | 第 1 步检查：权重迁移、形状、loss、显存、参数量、GFLOPs |
+| `tools\make_subset.py` | 新建 | 生成配对子集的 txt 列表和 data yaml |
+| `data\multispectral\DroneVehicle_1pct.yaml`、`DroneVehicle_1pct_train_{rgb,ir}.txt` | 新建 | 1% 子集（180 对） |
+| `train.py` | 修改（CFT 原有） | 双流权重映射、禁止自动下载、--nbs/--hyp-set/--pretrain-neck、nesterov 和 warmup 最少步数可配置、默认值、UTF-8 |
+| `test.py` | 修改（CFT 原有） | 画图只传 RGB；UTF-8 |
+| `models\yolo_test.py` | 修改（CFT 原有） | 模型 yaml 按 UTF-8 读取 |
+| `utils\loss.py` | 修改（CFT 原有） | clamp_ 的 dtype 修复 |
+| `utils\general.py` | 修改（CFT 原有） | 没有 pkg_resources 时跳过依赖检查 |
+| `CLAUDE.md`、`WORKLOG.md` | 修改 | 文档 |
+| `runs\overfit_add_m.log`、`runs\overfit_add_m_lr01.log`、`runs\train\overfit_add_m*\` | 运行产物 | 两次过拟合的日志、曲线、权重（git 忽略） |
+| `data\multispectral\DroneVehicle_1pct_train_{rgb,ir}.cache` | 运行产物 | 加载器生成的标签缓存（git 忽略） |
+| 会话临时目录 `scratchpad\probe_transfer.py`、`probe_aug.py` | 临时文件 | 第 1 节的只读探查脚本，不在项目中 |
+
+## 会话记录与磁盘实际状态的不一致（以磁盘为准）
+
+1. **D:\CCSFuse\.venv 不是本会话创建的**。
+   - 磁盘上的情况：创建时间 2026-10-15 03:56，uv 的 Python 3.15，14 MB，没有 torch。
+   - 推测：时间正好在你打开 check_model.py 之后，很可能是 VS Code 的 Python 扩展自动创建的。
+   - 它带有 `*` 的 .gitignore，git 不跟踪。
+   - **处理结果**：你确认它是 VS Code 提示创建的，同意删除。删除前我核实了：它只含 Python 3.15 和 pip，共 894 个文件，没有 torch，也没有你的文件；项目中没有任何配置引用它；没有 python 进程在运行。随后用 `rm -rf ./.venv` 删除，其他目录不受影响。
+2. **CLAUDE.md 原来写的"原有的 git 跟踪文件均未修改"已经过时**：本次修改了 5 个 CFT 原有文件，已在 CLAUDE.md 中更正。
+3. **后台监视任务显示 "stopped / 无完成记录"**：这是我用来查看训练进度的监视任务（bw0osy5hw）。两次训练实际都已完成：各 30 行 results.txt，日志末尾有 "30 epochs completed"，best.pt 和 last.pt 都在。
+4. **两个显存数字口径不同**：
+   - 第 1 步汇报中说"训练显存约 3.3 GB"，取自训练日志的 memory_reserved（3.32G）；
+   - check_model.py 报告的 2.24 GiB 是 max_memory_allocated。
+   - 两者都没错，只是统计口径不同。
+
+## 会话 3：第 2 步，数据管线（2026-10-15）
+
+### 改动
+| 文件 | 类型 | 内容 |
+|---|---|---|
+| `utils\datasets.py` | 修改（CFT 原有） | `LoadMultiModalImagesAndLabels.__getitem__` 非 Mosaic 分支恢复 `random_perspective_rgb_ir`（两路共用同一矩阵，translate/scale 来自 hyp，推断）；新增 hyp `hsv_ir: none\|independent\|same`（缺省时为 independent，保持 CFT 行为）；`augment_hsv` 新增 `gains=` 参数并返回所用增益 |
+| `data\hyp.ccsfuse_dronevehicle.yaml` | 修改 | 新增 `hsv_ir: none`（推断） |
+| `train.py` | 修改 | `--hyp-set` 允许 `hsv_ir` |
+| `tools\check_aug.py` | 新建 | 增强可视化（左 RGB 右 IR，带框）和三项数值检查 |
+
+### 验证
+`python tools\check_aug.py --n 10 --out runs/viz/aug_pairs.jpg`：
+- [1] 同一样本读两次，10/10 不同；增强全关时 10/10 相同；
+- [2] hsv_ir=none：IR 与"只做几何变换"的 IR 10/10 逐像素相同；RGB 10/10 被 HSV 改变；
+- [3] RGB 的灰边在 IR 中也是灰边：覆盖率最小 0.9998（6 个样本，4 个放大后无灰边的样本跳过）。
+  - 最初用 IoU 作指标，最小值为 0。原因是放大样本没有灰边，且 IR 灰度图中本来就有大量值为 114 的像素，并不是错位。
+- 可视化图：两路裁剪、缩放、翻转一致，框贴合 IR 目标；RGB 上少数框略偏，来自 DroneVehicle 本身的 RGB/IR 配准误差（标签取自 IR）。
+
+### 1% 子集过拟合复跑（lr0=0.01，30 epoch，warmup_epochs=1，warmup_min_iters=45）
+runs\train\overfit_add_m_lr01_aug，日志 runs\overfit_aug.log：
+| | loss 首→末 | mAP50 | mAP50:95 |
+|---|---|---|---|
+| 无增强（第 1 步） | 0.275→0.104 | 0.472 | 0.228 |
+| 新增强 | 0.269→0.127 | 0.456 | 0.211 |
+- loss 持续下降；加了增强后训练集更难拟合，末尾 loss 略高，符合预期。30 epoch 共 0.107 h，显存 3.45G（reserved）。

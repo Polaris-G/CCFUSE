@@ -1012,7 +1012,7 @@ if __name__ == '__main__':
         hyp = yaml.safe_load(f)  # load hyps
     for kv in opt.hyp_set:  # command-line overrides of hyp entries
         k, v = kv.split('=', 1)
-        assert k in hyp or k in ('nesterov', 'warmup_min_iters'), f'--hyp-set: unknown hyp key {k}'
+        assert k in hyp or k in ('nesterov', 'warmup_min_iters', 'hsv_ir'), f'--hyp-set: unknown hyp key {k}'
         hyp[k] = yaml.safe_load(v)
 
     # Train

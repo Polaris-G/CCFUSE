@@ -26,6 +26,7 @@ fl_gamma: 0.0
 hsv_h: 0.015  # 推断: YOLOv5 default color jitter strengths
 hsv_s: 0.7
 hsv_v: 0.4
+hsv_ir: none  # 推断: color jitter on RGB only; none | independent (CFT: own gains for IR) | same (IR reuses RGB gains)
 degrees: 0.0
 translate: 0.1  # 推断: "random crop" realized as YOLOv5 random translate+scale (paired RGB/IR)
 scale: 0.5  # 推断

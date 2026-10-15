@@ -1218,17 +1218,26 @@ class LoadMultiModalImagesAndLabels(Dataset):  # for training/testing
         if self.augment:
             # Augment imagespace
 
-            # if not mosaic:
-            #     img, labels = random_perspective(img, labels,
-            #                                      degrees=hyp['degrees'],
-            #                                      translate=hyp['translate'],
-            #                                      scale=hyp['scale'],
-            #                                      shear=hyp['shear'],
-            #                                      perspective=hyp['perspective'])
+            # CCSFuse: "random crop" = YOLOv5 random translate+scale, one shared matrix for RGB and IR
+            # (CFT had this commented out, so without Mosaic there was no geometric augmentation at all).
+            # 论文未给出，推断: realized via hyp translate/scale; set both to 0 to disable.
+            if not mosaic:
+                img_rgb, img_ir, labels_rgb, labels_ir = random_perspective_rgb_ir(img_rgb, img_ir, labels_rgb, labels_ir,
+                                                                                   degrees=hyp['degrees'],
+                                                                                   translate=hyp['translate'],
+                                                                                   scale=hyp['scale'],
+                                                                                   shear=hyp['shear'],
+                                                                                   perspective=hyp['perspective'])
 
-            # Augment colorspace
-            augment_hsv(img_rgb, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
-            augment_hsv(img_ir, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+            # Augment colorspace. 论文未给出，推断: hsv_ir = none (RGB only) | independent (CFT: own gains per
+            # stream) | same (one set of gains for both). Missing key -> 'independent' to keep CFT behaviour.
+            hsv_ir = hyp.get('hsv_ir', 'independent')
+            assert hsv_ir in ('none', 'independent', 'same'), f'hyp hsv_ir must be none|independent|same, got {hsv_ir}'
+            gains = augment_hsv(img_rgb, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+            if hsv_ir == 'independent':
+                augment_hsv(img_ir, hgain=hyp['hsv_h'], sgain=hyp['hsv_s'], vgain=hyp['hsv_v'])
+            elif hsv_ir == 'same':
+                augment_hsv(img_ir, gains=gains)
 
             # Apply cutouts
             # if random.random() < 0.9:
@@ -1371,8 +1380,9 @@ def load_image_rgb_ir(self, index):
 
 
 
-def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
-    r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
+def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5, gains=None):
+    # gains: reuse the returned gains of a previous call (CCSFuse hsv_ir=same)
+    r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1 if gains is None else gains  # random gains
     hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
     dtype = img.dtype  # uint8
 
@@ -1382,7 +1392,8 @@ def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
     lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
     img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
-    cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+    cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # in place
+    return r
 
 
 def hist_equalize(img, clahe=True, bgr=False):
