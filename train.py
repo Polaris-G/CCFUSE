@@ -34,6 +34,7 @@ from utils.google_utils import attempt_download
 from utils.loss import ComputeLoss
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
+from utils.ccsfuse import load_coco_dual_stream
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
 
 logger = logging.getLogger(__name__)
@@ -491,7 +492,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     plots = not opt.evolve  # create plots
     cuda = device.type != 'cpu'
     init_seeds(2 + rank)
-    with open(opt.data) as f:
+    with open(opt.data, encoding="utf-8") as f:
         data_dict = yaml.safe_load(f)  # data dict
     is_coco = opt.data.endswith('coco.yaml')
 
@@ -513,13 +514,19 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     # Model
     pretrained = weights.endswith('.pt')
     if pretrained:
-        with torch_distributed_zero_first(rank):
-            attempt_download(weights)  # download if not found locally
+        # CCSFuse: never let attempt_download fetch the latest (v5.0-incompatible) release weights
+        assert os.path.isfile(weights), f'weights {weights} not found locally (expected v5.0 COCO weights)'
         ckpt = torch.load(weights, map_location=device)  # load checkpoint
         model = Model(opt.cfg or ckpt['model'].yaml, ch=6, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
-        state_dict = ckpt['model'].float().state_dict()  # to FP32
-        state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
+        if len(ckpt['model'].model) != len(model.model):
+            # single-stream COCO checkpoint: copy the backbone into BOTH streams (CFT's plain intersect only
+            # filled the RGB stream; the IR stream stayed random)
+            state_dict, stats = load_coco_dual_stream(model, ckpt['model'], pretrain_neck=opt.pretrain_neck)
+            logger.info('COCO transfer per group: ' + ', '.join(f'{g} {a}/{b}' for g, (a, b) in stats.items()))
+        else:  # dual-stream checkpoint of the same architecture (resume / fine-tune)
+            state_dict = ckpt['model'].float().state_dict()  # to FP32
+            state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(state_dict, strict=False)  # load
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
@@ -540,7 +547,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
             v.requires_grad = False
 
     # Optimizer
-    nbs = 64  # nominal batch size
+    nbs = opt.nbs  # nominal batch size; accumulate = nbs / batch (CCSFuse default 12 = batch 4 x 3)
     accumulate = max(round(nbs / total_batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= total_batch_size * accumulate / nbs  # scale weight_decay
     logger.info(f"Scaled weight_decay = {hyp['weight_decay']}")
@@ -557,7 +564,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     if opt.adam:
         optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
     else:
-        optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
+        optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=hyp.get('nesterov', True))
 
     optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
@@ -670,7 +677,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
 
     # Start training
     t0 = time.time()
-    nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
+    nw = max(round(hyp['warmup_epochs'] * nb), hyp.get('warmup_min_iters', 1000))  # number of warmup iterations
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
     maps = np.zeros(nc)  # mAP per class
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
@@ -915,12 +922,18 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='yolov5l.pt', help='initial weights path')
-    parser.add_argument('--cfg', type=str, default='./models/transformer/yolov5l_fusion_add_FLIR_aligned.yaml', help='model.yaml path')
-    parser.add_argument('--data', type=str, default='./data/multispectral/FLIR_aligned.yaml', help='data.yaml path')
-    parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')
+    # CCSFuse defaults: RTX 3070 Ti Laptop 8GB, DroneVehicle, dual-stream YOLOv5m baseline, paper hyps
+    parser.add_argument('--weights', type=str, default='weights/yolov5m.pt', help='initial weights path (local v5.0 COCO)')
+    parser.add_argument('--cfg', type=str, default='models/ccsfuse/yolov5m_dual_add.yaml', help='model.yaml path')
+    parser.add_argument('--data', type=str, default='data/multispectral/DroneVehicle.yaml', help='data.yaml path')
+    parser.add_argument('--hyp', type=str, default='data/hyp.ccsfuse_dronevehicle.yaml', help='hyperparameters path')
+    parser.add_argument('--hyp-set', nargs='*', default=[], metavar='KEY=VALUE', help='override hyp entries, e.g. lr0=0.01 mosaic=0')
+    parser.add_argument('--epochs', type=int, default=45)  # 【论文】 45 epochs
+    parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
+    # 推断 (论文未给出): paper uses batch 12 on 2 GPUs; 8GB laptop -> batch 4 + accumulate to nominal 12
+    parser.add_argument('--nbs', type=int, default=12, help='nominal batch size for gradient accumulation (YOLOv5: 64)')
+    # 推断 (论文未给出): paper only says the backbone is COCO-pretrained; neck transfer is optional
+    parser.add_argument('--pretrain-neck', action='store_true', help='also copy COCO neck weights into the fused neck')
     parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='[train, test] image sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
     parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
@@ -937,7 +950,7 @@ if __name__ == '__main__':
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-    parser.add_argument('--workers', type=int, default=8, help='maximum number of dataloader workers')
+    parser.add_argument('--workers', type=int, default=2, help='maximum number of dataloader workers (Windows: 2-4)')
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
@@ -995,8 +1008,12 @@ if __name__ == '__main__':
         opt.batch_size = opt.total_batch_size // opt.world_size
 
     # Hyperparameters
-    with open(opt.hyp) as f:
+    with open(opt.hyp, encoding="utf-8") as f:
         hyp = yaml.safe_load(f)  # load hyps
+    for kv in opt.hyp_set:  # command-line overrides of hyp entries
+        k, v = kv.split('=', 1)
+        assert k in hyp or k in ('nesterov', 'warmup_min_iters'), f'--hyp-set: unknown hyp key {k}'
+        hyp[k] = yaml.safe_load(v)
 
     # Train
     logger.info(opt)

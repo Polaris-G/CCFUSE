@@ -131,12 +131,21 @@
   - 克隆代码库；
   - 整理并转换 DroneVehicle、LLVIP，均通过数量核对、可视化和加载器检查；
   - 下载并验证 v5.0 的 s/m 权重。
-- 未完成：方案第 7 节的全部步骤。
-- **下一步：方案第 7 节第 1 步**，搭建双流 YOLOv5 baseline（加法融合）。
-  - 验证方法：单个 batch 前向能通过，打印 P3/P4/P5 的形状，用 1% 的数据过拟合，loss 明显下降。
+  - 方案第 7 节第 1 步：双流 YOLOv5 baseline（加法融合），git 分支 `ccsfuse`。
+    - 模型配置 models\ccsfuse\yolov5{m,s}_dual_add.yaml（含 `pretrain_map`）；超参 data\hyp.ccsfuse_dronevehicle.yaml。
+    - train.py 默认值已改为本机配置：m 版、DroneVehicle、batch 4、`--nbs 12`（累积 3 步）、workers 2、45 epoch；新增 `--hyp-set k=v`、`--pretrain-neck`。
+    - 检查：`python tools\check_model.py`（权重迁移、P3/P4/P5 形状、显存、参数量）；`python tools\make_subset.py` 生成子集。
+    - 结果：Add 基线 m 版 33.43 M 参数、84.3 GFLOPs（2×MACs），batch 4 训练显存约 3.3 GB；1% 数据过拟合，lr0=0.01 时 loss 0.275→0.104。
+- **下一步：方案第 7 节第 2 步**，数据管线（非 Mosaic 分支恢复成对的随机裁剪；HSV 只作用于 RGB，做成可配置）。
 - 用户待办：手动删除 D:\CCSFuse_wheels（约 2.4 GB，torch wheel 已安装完毕；该删除操作被工具的安全规则拦截）。
 
 ## 踩过的坑（结论）
+- CFT 原来的权重加载（intersect_dicts 按键名）只给 RGB 主干加载 COCO 权重，IR 主干（第 10–19 层）是随机初始化。已用 utils\ccsfuse.py 的 `load_coco_dual_stream` 修复。
+- 双流模型在 models\yolo_test.py 中，`from: -4` 表示该层读取 IR 输入。
+- setuptools 84 没有 pkg_resources，已让 `check_requirements` 跳过。utils\loss.py 的 `clamp_` 在新版 torch 下报 dtype 错误，已修复。
+- results.txt 每行 8 个指标依次为：P、R、mAP50、mAP75、mAP50:95、val box/obj/cls。
+- lr0=0.001（论文值）时，1% 子集 30 epoch 的 mAP50 只到 0.12，原因是优化步数少（约 450 步），不是 bug；用 lr0=0.01 可以快速过拟合。
+- git 没有配置作者身份，提交时用 `git -c user.name=bzp02 -c user.email=...` 临时指定。
 - download.pytorch.org、阿里云、上海交大的镜像下载很慢且会断线。torch wheel 用南京大学镜像 https://mirrors.nju.edu.cn/pytorch/whl/cu124/ 下载，并用官方 SHA256 校验（已写在 requirements-ccsfuse.txt 中）。PyPI 用清华镜像。
 - numpy 必须 <1.24：代码中用到了 `np.int`。
 - 安装依赖要用 requirements-ccsfuse.txt 中写死的版本，加 `--only-binary :all:`。不写死版本时 pip 会长时间回溯。

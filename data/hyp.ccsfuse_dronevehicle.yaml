@@ -1,0 +1,37 @@
+# CCSFuse hyperparameters for DroneVehicle (paper Sec. IV-B).
+# 【论文】 SGD, momentum 0.9, lr 0.001, One-Cycle schedule, 45 epochs, batch 12 (6/GPU x 2).
+# Everything marked 推断 is NOT given in the paper (论文未给出，推断) and may be changed, e.g. with
+#   python train.py --hyp-set lrf=0.1 warmup_epochs=1
+# Epochs / batch / gradient accumulation are command-line options (--epochs 45 --batch-size 4 --nbs 12).
+
+lr0: 0.001  # 【论文】 initial learning rate
+lrf: 0.01  # 推断: One-Cycle final lr = lr0 * lrf (YOLOv5 cosine 1 -> lrf)
+momentum: 0.9  # 【论文】 SGD momentum (also Adam beta1 with --adam)
+nesterov: False  # 推断: paper just says "SGD"; YOLOv5 default is Nesterov=True
+weight_decay: 0.0005  # 推断: YOLOv5 default; scaled by batch*accumulate/nbs as in YOLOv5
+warmup_epochs: 3.0  # 推断: YOLOv5 default (One-Cycle has a ramp-up phase)
+warmup_min_iters: 1000  # 推断: YOLOv5 forces >=1000 warmup iterations; lower it for tiny overfit runs
+warmup_momentum: 0.8  # 推断: YOLOv5 default
+warmup_bias_lr: 0.01  # 推断: YOLOv5 uses 10x lr0 (0.1 for lr0=0.01); kept at 10x lr0 here
+box: 0.05  # YOLOv5 default loss gains (paper uses YOLOv5 loss)
+cls: 0.5
+cls_pw: 1.0
+obj: 1.0
+obj_pw: 1.0
+iou_t: 0.20
+anchor_t: 4.0
+fl_gamma: 0.0
+
+# Augmentation. 【论文】 horizontal flip, random crop, color jitter.
+hsv_h: 0.015  # 推断: YOLOv5 default color jitter strengths
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1  # 推断: "random crop" realized as YOLOv5 random translate+scale (paired RGB/IR)
+scale: 0.5  # 推断
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5  # 【论文】 horizontal flip
+mosaic: 0.0  # 推断: paper does not mention Mosaic -> off (CFT default is 1.0)
+mixup: 0.0

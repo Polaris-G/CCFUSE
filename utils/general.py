@@ -100,7 +100,11 @@ def check_git_status():
 
 def check_requirements(requirements='requirements.txt', exclude=()):
     # Check installed dependencies meet requirements (pass *.txt file or list of packages)
-    import pkg_resources as pkg
+    try:
+        import pkg_resources as pkg
+    except ImportError:  # setuptools>=81 removed pkg_resources; env is pinned by requirements-ccsfuse.txt
+        print('requirements: pkg_resources unavailable, skipping check (see check_env.py)')
+        return
     prefix = colorstr('red', 'bold', 'requirements:')
     if isinstance(requirements, (str, Path)):  # requirements.txt file
         file = Path(requirements)

@@ -172,7 +172,7 @@ class Model(nn.Module):
         else:  # is *.yaml
             import yaml  # for torch hub
             self.yaml_file = Path(cfg).name
-            with open(cfg) as f:
+            with open(cfg, encoding="utf-8") as f:
                 self.yaml = yaml.safe_load(f)  # model dict
             # print("YAML")
             # print(self.yaml)

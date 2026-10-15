@@ -1,0 +1,12 @@
+# 180/17990 pairs of data/multispectral/DroneVehicle.yaml [train], seed 0; train == val (overfit check)
+train_rgb: D:/CCSFuse/data/multispectral/DroneVehicle_1pct_train_rgb.txt
+val_rgb: D:/CCSFuse/data/multispectral/DroneVehicle_1pct_train_rgb.txt
+train_ir: D:/CCSFuse/data/multispectral/DroneVehicle_1pct_train_ir.txt
+val_ir: D:/CCSFuse/data/multispectral/DroneVehicle_1pct_train_ir.txt
+nc: 5
+names:
+- car
+- truck
+- freight car
+- bus
+- van
