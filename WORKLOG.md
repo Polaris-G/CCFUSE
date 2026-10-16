@@ -514,3 +514,20 @@ test 集评估（我运行，约 16 分钟，主要耗时在 test.py 默认写�
 | m | 33.43 M | 53.79 M | 38.08 M |
 （以上都还没算 AFSF：m 版约 4–5 M，s 版约 2 M。）
 论文 CCSFuse 为 33.50 M、174.12 GFLOPs。m 基线已有 33.43 M，留给 CMFC 和 AFSF 的只有约 0.07 M，而一个 768×768 的 Linear 就有 0.59 M。GFLOPs 粗算：m 基线 84，加 CMFC 后约 94，离 174 也很远。**论文的效率数字无法和任何合理配置同时吻合，不能用来反推 CMFC 的结构。**
+
+## 会话 3：第 5 步，AFSF 实现与单元测试（2026-10-15）
+
+`models\ccsfuse_modules.py` 中新增 `AFSF`，测试为 `tools\test_afsf.py`。
+- 式 (7)：w_m = Sigmoid(Conv1×1(GAP(f_m)))，RGB 和 IR 各一个独立的 1×1 卷积（C→C，带 bias，推断）；
+- 式 (8)：拼接成 B×2C，经过 FC1（2C→2C/reduction）、GELU、FC2（→2C），再按通道切成两半，前 C 个为 w̃_rgb，后 C 个为 w̃_ir（推断）；
+- 式 (9)：f_m × w̃_m；
+- 式 (10)：YOLOv5 Conv（Conv+BN+SiLU）把 2C 压到 C（推断）。
+- 推断项均为构造参数：`reduction=4`、`sigmoid_after_mlp=False`（默认忠实原文，即 MLP 后不加激活，权重可以为负）。
+
+`python tools\test_afsf.py` 全部通过：
+- 三个 stage 形状一致；
+- 用模块自身的各层手算式 (7)–(10)，与输出一致（误差 4.7e-6）；
+- 默认设置下 w̃ 在初始化时的范围约为 [−0.30, 0.29]（会出现负值，并会把特征幅值压小，由 fuse 中的 BN 重新归一）；`sigmoid_after_mlp=True` 时权重在 (0,1) 内；
+- 梯度能回传到两路输入和全部参数；AMP 下（输入放大 30 倍）结果为有限值；
+- 三个 stage 的 CMFC→AFSF 串联都能跑通，梯度能回传到两路输入和 λ。
+- 参数量：3 个 AFSF 共 4.65 M；m 版 CCSFuse 合计约 **58.45 M**（基线 33.43 + CMFC 20.37 + AFSF 4.65），论文为 33.50 M（用户已决定接受这一差异，见第 4 步）。

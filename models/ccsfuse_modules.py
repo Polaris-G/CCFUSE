@@ -1,12 +1,15 @@
 """CCSFuse modules (Zhang et al., IEEE TGRS 2026).
 
 CMFC: Cross-Modal Feature Compensation (paper Sec. III-C, Eqs. (1)-(6), Fig. 3).
+AFSF: Adaptive Feature Selective Fusion (paper Sec. III-D, Eqs. (7)-(10), Fig. 4).
 Every setting the paper does not give is a constructor argument and marked 论文未给出，推断
-(see CCSFuse_复现方案.md, Sec. 2 and Sec. 8).
+(see CCSFuse_复现方案.md, Sec. 2, 3 and 8).
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from models.common import Conv
 
 
 class _ModalityQKV(nn.Module):
@@ -98,3 +101,46 @@ class CMFC(nn.Module):
         ir_from_rgb = self.proj_ir(self._attend(q_ir, k_rgb, v_rgb, self.lambda_ir).to(f_ir.dtype))
         to_map = lambda t: t.transpose(1, 2).reshape(b, c, h, w)
         return f_rgb + to_map(rgb_from_ir), f_ir + to_map(ir_from_rgb)  # Eq. (6)
+
+
+class AFSF(nn.Module):
+    """Adaptive Feature Selective Fusion. forward(f_rgb, f_ir) or forward([f_rgb, f_ir]) -> fused B,C,H,W.
+
+    Eq. (7):  w_m = Sigmoid(Conv1x1(GAP(f_m)))                for m in {rgb, ir}
+    Eq. (8):  [w~_rgb, w~_ir] = FC2(GELU(FC1(concat(w_rgb, w_ir))))
+    Eq. (9):  f^c_m = f_m * w~_m                              (channel recalibration)
+    Eq. (10): f = Conv1x1(concat(f^c_rgb, f^c_ir))            (2C -> C)
+
+    Args (论文未给出，推断 except c):
+        c: channels of each input (= output channels).
+        reduction: FC1 hidden size = 2C // reduction (plan default 4).
+        sigmoid_after_mlp: apply Sigmoid to the MLP output; the paper writes none, so the default is False
+            (faithful) and the recalibration weights may be negative.
+    Also inferred: one independent Conv1x1 (C -> C, with bias) per modality in Eq. (7); the 2C MLP output is split
+    by channel into w~_rgb (first C) and w~_ir (last C); Eq. (10) uses YOLOv5 Conv (Conv + BN + SiLU).
+    """
+
+    def __init__(self, c, reduction=4, sigmoid_after_mlp=False):
+        super().__init__()
+        self.c, self.sigmoid_after_mlp = c, sigmoid_after_mlp
+        self.desc_rgb = nn.Conv2d(c, c, 1)  # Eq. (7)
+        self.desc_ir = nn.Conv2d(c, c, 1)
+        self.fc1 = nn.Linear(2 * c, max(2 * c // reduction, 1))  # Eq. (8)
+        self.fc2 = nn.Linear(max(2 * c // reduction, 1), 2 * c)
+        self.fuse = Conv(2 * c, c, 1)  # Eq. (10)
+
+    def channel_weights(self, f_rgb, f_ir):
+        """Eqs. (7)-(8): recalibration weights w~_rgb, w~_ir, each B,C,1,1."""
+        w_rgb = torch.sigmoid(self.desc_rgb(F.adaptive_avg_pool2d(f_rgb, 1)))
+        w_ir = torch.sigmoid(self.desc_ir(F.adaptive_avg_pool2d(f_ir, 1)))
+        w = self.fc2(F.gelu(self.fc1(torch.cat((w_rgb, w_ir), 1).flatten(1))))  # B,2C
+        if self.sigmoid_after_mlp:
+            w = torch.sigmoid(w)
+        w = w[..., None, None]
+        return w[:, :self.c], w[:, self.c:]
+
+    def forward(self, f_rgb, f_ir=None):
+        if f_ir is None:  # called from the YOLO graph with a [rgb, ir] list
+            f_rgb, f_ir = f_rgb
+        w_rgb, w_ir = self.channel_weights(f_rgb, f_ir)
+        return self.fuse(torch.cat((f_rgb * w_rgb, f_ir * w_ir), 1))  # Eqs. (9)-(10)
