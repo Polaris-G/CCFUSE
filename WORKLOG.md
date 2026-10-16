@@ -489,3 +489,28 @@ test 集评估（我运行，约 16 分钟，主要耗时在 test.py 默认写�
 - 差距 5.5 点，**全部来自 freight car 和 van**；car、truck、bus 与论文 +CMFC 行持平甚至更高。
 - 混淆矩阵（runs\train\baseline_add_m\confusion_matrix.png，val 集）：van 51% 被判成 car（只有 20% 判对，召回率 0.17）；freight car 42% 被判成 truck（35% 判对）。漏检比例低，说明问题出在分类，不在定位。
 - 其他：mAP50:95 0.456，推理速度 11.3 ms/张（batch 8）。
+
+## 会话 3：第 4 步，CMFC 实现与单元测试（2026-10-15）
+
+新增 `models\ccsfuse_modules.py`（CMFC）和 `tools\test_cmfc.py`。不改 common.py；文件名不用 models\ccsfuse.py，因为 models\ccsfuse\ 已经是 yaml 目录。
+- 结构（式 1–6）：每个模态各一套 Q/K/V（论文：W_rgb ≠ W_ir）；Q 用全分辨率 token，K/V 用经 SR 缩减后的 token；scores = QKᵀ/√d；输出 = w_SIC·Softmax(scores) + w_RIS·ReLU(scores)²，再乘 V；(w_SIC, w_RIS) = softmax(λ1, λ2)，λ 初始化为 1；最后加残差 f。
+- 推断项均为构造参数：`num_heads=8`（可设 'auto' = C/64）、`sr_ratio`（方案默认 8/4/2）、`out_proj=True`、`share_lambda=True`、`ris_norm=False`、`attn_fp32=True`。SR = Conv(k=r, s=r) + LayerNorm（PVT 写法）。
+- forward 接受 `(f_rgb, f_ir)` 或 `[f_rgb, f_ir]`（YOLO 图中的调用方式），返回 `(f_rgb_cmfc, f_ir_cmfc)`。接入网络（第 6 步）时：回注方式 A 需要一个按下标取出的模块；方式 B 正好对应 CFT 已有的 Add2。
+- λ 是直接定义的 nn.Parameter，train.py 的 pg0/pg1/pg2 收集不到，第 6 步要单独加进优化器。
+
+`python tools\test_cmfc.py` 全部通过：
+- 形状：(2,192,80,80)、(2,384,40,40)、(2,768,20,20) 输入输出形状一致；
+- 初始化 w=0.5/0.5；share_lambda 开关生效；
+- λ=[50,−50]（w_SIC≈1）时，与 F.scaled_dot_product_attention 写的普通交叉注意力一致（相对误差 9e-8）；λ=[−50,50] 时与手写的 ReLU²·V 一致；
+- AMP fp16 下前向和反向都是有限值（attn_fp32 开或关、输入放大 30 倍都测过）；
+- 只对 RGB 输出求梯度时，IR 输入和 λ 也有梯度；
+- 训练规模（batch 4，三个 stage，AMP）下前向加反向额外显存约 1.1 GiB。
+
+### 参数量矛盾（重要，待用户决定）
+3 个 CMFC（m 版，方案默认配置）共 **20.37 M** 参数：SR 卷积约 14.2 M（c²r²，三个 stage 各约 2.36 M，两路各一套），Linear 约 6.2 M。
+| 规模 | 基线 | +CMFC（卷积 SR + 投影） | +CMFC（SR 无参数、无投影） |
+|---|---|---|---|
+| s | 11.29 M | 20.34 M | 13.36 M |
+| m | 33.43 M | 53.79 M | 38.08 M |
+（以上都还没算 AFSF：m 版约 4–5 M，s 版约 2 M。）
+论文 CCSFuse 为 33.50 M、174.12 GFLOPs。m 基线已有 33.43 M，留给 CMFC 和 AFSF 的只有约 0.07 M，而一个 768×768 的 Linear 就有 0.59 M。GFLOPs 粗算：m 基线 84，加 CMFC 后约 94，离 174 也很远。**论文的效率数字无法和任何合理配置同时吻合，不能用来反推 CMFC 的结构。**

@@ -1,4 +1,4 @@
-﻿# CCSFuse 复现项目
+# CCSFuse 复现项目
 
 ## 项目目标
 复现 CCSFuse（Zhang et al., IEEE TGRS 2026, Art. no. 5400314，UAV RGB-IR 目标检测：CMFC + AFSF，基于 YOLOv5 双流）。
@@ -172,6 +172,8 @@
   - test 集 mAP50 **67.3**（论文 72.8）：car 97.7、truck 68.8、freight car 46.6、bus 94.3、van 28.8。差距全部来自 van（51% 被判成 car）和 freight car（42% 被判成 truck）。详见 WORKLOG。
   - test 评估命令：`python test.py --weights <best.pt> --data data/multispectral/DroneVehicle_test.yaml --batch-size 8 --iou-thres 0.6 --task test --verbose --name <名字>`（必须显式写 `--iou-thres 0.6`，test.py 命令行默认 0.5；运行约 16 分钟）。
   - 用户决定：接受 67.3 作为自己的基线，后续按相对提升评判（方案第 6 节的判定标准）。
+- **第 4 步（CMFC）已实现，单元测试全部通过**：models\ccsfuse_modules.py 中的 `CMFC`，测试为 `python tools\test_cmfc.py`（应输出 ALL CMFC TESTS PASSED）。
+  - m 版 3 个 CMFC 共 20.37 M 参数，加上后总参数约 54 M，与论文的 33.50 M 矛盾（详见 WORKLOG）。用户决定：保持 m 版和方案默认 CMFC（卷积 SR + 输出投影），按相对提升评判；轻量 SR 暂不加，若 +CMFC 提升明显不足再作为排查手段。
 - **长时间训练一律交给用户在自己电脑上运行**（用户要求）：给出完整命令、监控方法、续训命令，等用户贴回结果。
 - 第 4、5 步时注意：CMFC 的 λ 是单独定义的 nn.Parameter，train.py 的优化器分组（pg0/pg1/pg2）收集不到它，需要单独加进优化器。
 - 后台训练：无（2026-10-15 04:00 核实，没有 python 进程在运行）。
