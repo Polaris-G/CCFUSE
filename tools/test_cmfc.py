@@ -66,6 +66,15 @@ with torch.no_grad():
         rel = err / max(r_rgb.abs().max().item(), 1e-12)
         check(f'w_{branch.upper()}=1 equals reference {branch}', rel < 1e-4, f'max abs err {err:.2e}, rel {rel:.2e}')
     m.lambda_rgb.fill_(1.0)
+    # Table II: fixed branch weights, no lambda parameter
+    mf = CMFC(192, sr_ratio=8, branch_weights=(1.0, 0.0)).to(dev).eval()
+    mf.load_state_dict({k: v for k, v in m.state_dict().items() if 'lambda' not in k}, strict=False)
+    o_rgb, _ = mf(x_rgb, x_ir)
+    r_rgb = reference(mf, x_rgb, x_ir, mf.qkv_rgb, mf.qkv_ir, mf.proj_rgb, 'sic')
+    err = (o_rgb - r_rgb).abs().max().item()
+    check('branch_weights=(1,0): no lambda, equals reference sic',
+          not any('lambda' in n for n, _ in mf.named_parameters()) and err / r_rgb.abs().max().item() < 1e-4,
+          f'max abs err {err:.2e}')
 
 # 4. fp16 / AMP: finite forward + backward, also with large-magnitude features (ReLU^2 is unnormalized)
 if dev.type == 'cuda':

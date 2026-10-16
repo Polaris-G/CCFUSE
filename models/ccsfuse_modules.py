@@ -51,10 +51,12 @@ class CMFC(nn.Module):
         share_lambda: one (lambda1, lambda2) pair for both directions; False -> one pair per direction.
         ris_norm: divide the ReLU^2 branch by M (number of K tokens) to bound its magnitude.
         attn_fp32: compute QK^T, both branches and @V in fp32 even under AMP (ReLU^2 is unnormalized).
+        branch_weights: None = learnable lambdas (paper). A fixed (w_SIC, w_RIS) pair, e.g. (1, 0) Softmax only,
+            (0, 1) ReLU^2 only, (0.5, 0.5), reproduces the Table II ablations; no lambda is created then.
     """
 
     def __init__(self, c, num_heads=8, sr_ratio=4, out_proj=True, share_lambda=True, ris_norm=False,
-                 attn_fp32=True):
+                 attn_fp32=True, branch_weights=None):
         super().__init__()
         num_heads = max(c // 64, 1) if num_heads == 'auto' else int(num_heads)
         assert c % num_heads == 0, f'CMFC: channels {c} not divisible by num_heads {num_heads}'
@@ -65,20 +67,26 @@ class CMFC(nn.Module):
         self.qkv_ir = _ModalityQKV(c, sr_ratio)
         self.proj_rgb = nn.Linear(c, c) if out_proj else nn.Identity()
         self.proj_ir = nn.Linear(c, c) if out_proj else nn.Identity()
-        # Eq. (4): learnable branch logits, init 1 -> w_SIC = w_RIS = 0.5.
-        # NOTE: plain nn.Parameter, not collected by train.py's pg0/pg1/pg2 -> must be added to the optimizer.
-        self.lambda_rgb = nn.Parameter(torch.ones(2))
-        self.lambda_ir = self.lambda_rgb if share_lambda else nn.Parameter(torch.ones(2))
+        if branch_weights is None:
+            # Eq. (4): learnable branch logits, init 1 -> w_SIC = w_RIS = 0.5.
+            # NOTE: plain nn.Parameter, not collected by YOLOv5's pg0/pg1/pg2; train.py adds leftover params.
+            self.lambda_rgb = nn.Parameter(torch.ones(2))
+            self.lambda_ir = self.lambda_rgb if share_lambda else nn.Parameter(torch.ones(2))
+        else:
+            self.lambda_rgb = self.lambda_ir = None
+            self.register_buffer('fixed_weights', torch.tensor(branch_weights, dtype=torch.float32))
 
     def branch_weights(self):
         """(w_SIC, w_RIS) for the rgb<-ir and ir<-rgb directions."""
-        return F.softmax(self.lambda_rgb, 0), F.softmax(self.lambda_ir, 0)
+        if self.lambda_rgb is None:
+            return self.fixed_weights, self.fixed_weights
+        return F.softmax(self.lambda_rgb.float(), 0), F.softmax(self.lambda_ir.float(), 0)
 
     def _heads(self, t):  # B,L,C -> B,h,L,d
         return t.reshape(t.shape[0], t.shape[1], self.h, self.d).transpose(1, 2)
 
-    def _attend(self, q, k, v, lam):
-        """Eqs. (2)-(5): (w_SIC * Softmax(s) + w_RIS * ReLU(s)^2) @ V with s = QK^T / sqrt(d)."""
+    def _attend(self, q, k, v, w):
+        """Eqs. (2)-(5): (w[0] * Softmax(s) + w[1] * ReLU(s)^2) @ V with s = QK^T / sqrt(d), w = (w_SIC, w_RIS)."""
         q, k, v = self._heads(q), self._heads(k), self._heads(v)
         with torch.autocast(device_type=q.device.type, enabled=not self.attn_fp32 and torch.is_autocast_enabled()):
             if self.attn_fp32:
@@ -87,7 +95,6 @@ class CMFC(nn.Module):
             ris = F.relu(s) ** 2
             if self.ris_norm:
                 ris = ris / s.shape[-1]
-            w = F.softmax(lam.float() if self.attn_fp32 else lam, 0)
             out = (w[0] * s.softmax(-1) + w[1] * ris) @ v  # B,h,N,d
         return out.transpose(1, 2).reshape(out.shape[0], -1, self.c)  # B,N,C
 
@@ -97,8 +104,9 @@ class CMFC(nn.Module):
         b, c, h, w = f_rgb.shape
         q_rgb, k_rgb, v_rgb = self.qkv_rgb(f_rgb)
         q_ir, k_ir, v_ir = self.qkv_ir(f_ir)
-        rgb_from_ir = self.proj_rgb(self._attend(q_rgb, k_ir, v_ir, self.lambda_rgb).to(f_rgb.dtype))
-        ir_from_rgb = self.proj_ir(self._attend(q_ir, k_rgb, v_rgb, self.lambda_ir).to(f_ir.dtype))
+        w_rgb, w_ir = self.branch_weights()
+        rgb_from_ir = self.proj_rgb(self._attend(q_rgb, k_ir, v_ir, w_rgb).to(f_rgb.dtype))
+        ir_from_rgb = self.proj_ir(self._attend(q_ir, k_rgb, v_rgb, w_ir).to(f_ir.dtype))
         to_map = lambda t: t.transpose(1, 2).reshape(b, c, h, w)
         return f_rgb + to_map(rgb_from_ir), f_ir + to_map(ir_from_rgb)  # Eq. (6)
 
@@ -144,3 +152,27 @@ class AFSF(nn.Module):
             f_rgb, f_ir = f_rgb
         w_rgb, w_ir = self.channel_weights(f_rgb, f_ir)
         return self.fuse(torch.cat((f_rgb * w_rgb, f_ir * w_ir), 1))  # Eqs. (9)-(10)
+
+class CMFCInject(nn.Module):
+    """Feeds a CMFC output back into its own stream ("closed loop", Fig. 2). Graph input [stage_out, cmfc_out].
+
+    mode (论文未给出，推断): 'A' -> next stage input = f^CMFC (already = f + compensation, Eq. (6));
+    'B' -> next stage input = stage_out + f^CMFC (literal reading of the (+) in Fig. 2).
+    index: 0 = RGB stream, 1 = IR stream.
+    """
+
+    def __init__(self, mode='A', index=0):
+        super().__init__()
+        assert mode in ('A', 'B'), f'CMFCInject mode must be A or B, got {mode}'
+        self.mode, self.index = mode, index
+
+    def forward(self, x):
+        f, cmfc = x
+        return cmfc[self.index] if self.mode == 'A' else f + cmfc[self.index]
+
+
+class PairAdd(nn.Module):
+    """Element-wise sum of an (rgb, ir) pair, e.g. a CMFC output (Table I '+CMFC only' row: Add fusion)."""
+
+    def forward(self, x):
+        return x[0] + x[1]

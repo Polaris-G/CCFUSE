@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import thop  # noqa: E402
 import torch  # noqa: E402
 import yaml  # noqa: E402
+from torch.utils.flop_counter import FlopCounterMode  # noqa: E402
 
 from models.yolo_test import Model  # noqa: E402
 from utils.ccsfuse import load_coco_dual_stream  # noqa: E402
@@ -30,7 +31,7 @@ ap.add_argument("--hyp", default="data/hyp.ccsfuse_dronevehicle.yaml")
 ap.add_argument("--batch-size", type=int, default=4)
 ap.add_argument("--img-size", type=int, default=640)
 ap.add_argument("--pretrain-neck", action="store_true")
-ap.add_argument("--fused-types", default="Add,AFSF", help="module types whose outputs are the fused f3/f4/f5")
+ap.add_argument("--fused-types", default="Add,AFSF,PairAdd", help="module types whose outputs are the fused f3/f4/f5")
 a = ap.parse_args()
 logging.disable(logging.INFO)
 dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -95,4 +96,11 @@ if dev.type == "cuda":
 n_params = sum(p.numel() for p in model.parameters())
 z = torch.zeros(1, 3, a.img_size, a.img_size, device=dev)
 macs = thop.profile(deepcopy(model).eval(), inputs=(z, z), verbose=False)[0]
-print(f"params {n_params / 1e6:.2f} M, GFLOPs @{a.img_size} {2 * macs / 1e9:.2f}  (paper CCSFuse: 33.50 M, 174.12)")
+# thop only counts nn modules; FlopCounterMode also counts the attention matmuls (QK^T, @V) inside CMFC
+with torch.no_grad(), FlopCounterMode(display=False) as fc:
+    deepcopy(model).eval()(z, z)
+print(f"params {n_params / 1e6:.2f} M, GFLOPs @{a.img_size}: thop {2 * macs / 1e9:.2f}, "
+      f"flop_counter {fc.get_total_flops() / 1e9:.2f}  (paper CCSFuse: 33.50 M, 174.12)")
+lambdas = [(n, torch.softmax(p.float(), 0).tolist()) for n, p in model.named_parameters() if 'lambda' in n]
+if lambdas:
+    print("CMFC branch weights (w_SIC, w_RIS):", ", ".join(f"{n.split('.')[1]}: {w[0]:.2f}/{w[1]:.2f}" for n, w in lambdas))

@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 from models.common import *
 from models.experimental import *
+from models.ccsfuse_modules import CMFC, AFSF, CMFCInject, PairAdd
 from utils.autoanchor import check_anchor_order
 from utils.general import make_divisible, check_file, set_logging
 from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
@@ -493,6 +494,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 pass
 
         n = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        kw = {}  # keyword args (CCSFuse modules take their inferred settings from top-level yaml keys)
         if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, DWConv, MixConv2d, Focus, CrossConv, BottleneckCSP,
                  C3, C3TR]:
 
@@ -528,6 +530,23 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m is GPT:
             c2 = ch[f[0]]
             args = [c2]
+        # CCSFuse: [[rgb, ir], 1, CMFC, [sr_ratio]] -> (rgb, ir); other settings from yaml key `cmfc`
+        elif m is CMFC:
+            c2 = ch[f[0]]
+            kw = {**d.get('cmfc', {}), 'sr_ratio': args[0]}
+            args = [c2]
+        # [[stage_out, cmfc], 1, CMFCInject, [index]]; A/B from yaml key `cmfc_inject` (论文未给出，推断)
+        elif m is CMFCInject:
+            c2 = ch[f[0]]
+            args = [d.get('cmfc_inject', 'A'), args[0]]
+        # [cmfc] (a pair) or [[rgb, ir], ...]; settings from yaml key `afsf`
+        elif m is AFSF:
+            c2 = ch[f if isinstance(f, int) else f[0]]
+            kw = dict(d.get('afsf', {}))
+            args = [c2]
+        elif m is PairAdd:
+            c2 = ch[f]
+            args = []
         elif m is Detect:
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
@@ -539,11 +558,11 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         else:
             c2 = ch[f]
 
-        m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
+        m_ = nn.Sequential(*[m(*args, **kw) for _ in range(n)]) if n > 1 else m(*args, **kw)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
         np = sum([x.numel() for x in m_.parameters()])  # number params
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args))  # print
+        logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args + ([kw] if kw else [])))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:

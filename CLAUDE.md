@@ -46,6 +46,10 @@
 - **改动过的 CFT 原有文件**（第 2 步）：
   - utils\datasets.py：`LoadMultiModalImagesAndLabels` 非 Mosaic 分支恢复成对的 random_perspective_rgb_ir；hyp `hsv_ir: none|independent|same`（缺省为 independent，即 CFT 原行为）；`augment_hsv` 增加 `gains=` 参数并返回增益。
   - train.py：`--hyp-set` 允许 `hsv_ir`。
+- **改动过的 CFT 原有文件**（第 6 步）：
+  - models\yolo_test.py：导入并在 parse_model 中注册 CMFC/CMFCInject/AFSF/PairAdd；模块构造支持 kwargs（从 yaml 顶层的 cmfc/cmfc_inject/afsf 读取）。
+  - train.py（train_rgb_ir）：LayerNorm weight 不衰减；未分组参数（λ）补进 pg0。注意 train.py 里有两段相同的分组代码，第一段属于不用的单流 `train`，没有改。
+- 新增文件（会话 3，第 4–6 步）：models\ccsfuse_modules.py（CMFC、AFSF、CMFCInject、PairAdd）；tools\test_cmfc.py、tools\test_afsf.py；models\ccsfuse\yolov5m_{ccsfuse,cmfc_add,afsf}.yaml。
 - 新增文件（会话 3，第 2 步）：tools\check_aug.py（`python tools\check_aug.py --n 10 --out runs/viz/aug_pairs.jpg`，可加 `--hyp-set hsv_ir=same`）。
 - 新增文件（会话 1）：check_env.py、requirements-ccsfuse.txt；tools\ 下的 prepare_dronevehicle.py、prepare_llvip.py、viz_pairs.py、check_loader.py、check_weights.py；data\multispectral\ 下的 DroneVehicle.yaml、DroneVehicle_test.yaml、LLVIP_ccsfuse.yaml。
 - 新增文件（会话 2，第 1 步）：
@@ -174,8 +178,14 @@
   - 用户决定：接受 67.3 作为自己的基线，后续按相对提升评判（方案第 6 节的判定标准）。
 - **第 4 步（CMFC）已实现，单元测试全部通过**（commit 909c743）：models\ccsfuse_modules.py 中的 `CMFC`，测试为 `python tools\test_cmfc.py`（应输出 ALL CMFC TESTS PASSED）。
   - m 版 3 个 CMFC 共 20.37 M 参数，加上后总参数约 54 M，与论文的 33.50 M 矛盾（详见 WORKLOG）。用户决定：保持 m 版和方案默认 CMFC（卷积 SR + 输出投影），按相对提升评判；轻量 SR 暂不加，若 +CMFC 提升明显不足再作为排查手段。
-- **第 5 步（AFSF）已实现，单元测试全部通过，尚未提交**：models\ccsfuse_modules.py 中的 `AFSF`（`reduction=4`，`sigmoid_after_mlp=False`），测试为 `python tools\test_afsf.py`（应输出 ALL AFSF TESTS PASSED）。3 个 AFSF 共 4.65 M 参数；m 版 CCSFuse 合计约 58.45 M。
-- 下一步：第 6 步，接入网络。写 models\ccsfuse\ 下的 yaml（CMFC 回注方式 A/B 可配置）；在 yolo_test.py 的 parse_model 中注册 CMFC/AFSF；把 λ 加进 train.py 的优化器；跑 check_model.py 统计参数量、GFLOPs 和显存，并实测每个 epoch 的耗时。
+- **第 5 步（AFSF）已实现，单元测试全部通过**（commit 76ba902）：models\ccsfuse_modules.py 中的 `AFSF`（`reduction=4`，`sigmoid_after_mlp=False`），测试为 `python tools\test_afsf.py`（应输出 ALL AFSF TESTS PASSED）。3 个 AFSF 共 4.65 M 参数；m 版 CCSFuse 合计约 58.45 M。
+- **第 6 步（接入网络）已完成**（详见 WORKLOG）：
+  - 模型配置：`models\ccsfuse\yolov5m_ccsfuse.yaml`（完整版）、`yolov5m_cmfc_add.yaml`（+CMFC）、`yolov5m_afsf.yaml`（+AFSF）。推断项在 yaml 顶层的 `cmfc:`、`cmfc_inject:`（A/B）、`afsf:` 中设置；Table II 用 `cmfc: branch_weights: [1, 0]` 等。
+  - 参数量：完整版 58.45 M、+CMFC 53.79 M、+AFSF 38.08 M。GFLOPs（flop_counter）：97.3 / 94.5 / 86.5。
+  - 速度约为基线的 1/1.6。推算完整训练：完整版约 12.5 h，+CMFC 约 12 h，+AFSF 约 8–8.5 h（都由用户自己运行）。
+  - train.py 会把 λ 补进优化器的不衰减组（日志中有 "Optimizer: 3 extra parameter tensors"）。
+  - test.py（attempt_load + Conv/BN 融合）能正常评估新模型；推理 39 ms/张，基线为 11 ms/张，主要因为注意力在 fp32 下计算。
+- 下一步：第 7 步，按 Table I 顺序跑消融（+CMFC → +AFSF → 完整版），由用户在 VS Code 中运行，每次结束后用 test 集评估。
 - **长时间训练一律交给用户在自己电脑上运行**（用户要求）：给出完整命令、监控方法、续训命令，等用户贴回结果。
 - 第 6 步时注意：CMFC 的 λ 是单独定义的 nn.Parameter，train.py 的优化器分组（pg0/pg1/pg2）收集不到它，需要单独加进优化器。
 - 后台训练：无（2026-10-15 04:00 核实，没有 python 进程在运行）。

@@ -531,3 +531,27 @@ test 集评估（我运行，约 16 分钟，主要耗时在 test.py 默认写�
 - 梯度能回传到两路输入和全部参数；AMP 下（输入放大 30 倍）结果为有限值；
 - 三个 stage 的 CMFC→AFSF 串联都能跑通，梯度能回传到两路输入和 λ。
 - 参数量：3 个 AFSF 共 4.65 M；m 版 CCSFuse 合计约 **58.45 M**（基线 33.43 + CMFC 20.37 + AFSF 4.65），论文为 33.50 M（用户已决定接受这一差异，见第 4 步）。
+
+## 会话 3：第 6 步，接入网络（2026-10-15）
+
+改动：
+- `models\ccsfuse_modules.py`：CMFC 新增 `branch_weights`（None 为可学习 λ；给定 (w_SIC, w_RIS) 时权重固定且不创建 λ，用于 Table II）；新增 `CMFCInject`（回注方式 A 为 f^CMFC，B 为 stage 输出 + f^CMFC）和 `PairAdd`（把一对特征相加，用于 +CMFC 消融）。
+- `models\yolo_test.py`：parse_model 注册 CMFC/CMFCInject/AFSF/PairAdd；推断项从 yaml 顶层的 `cmfc:`、`cmfc_inject:`、`afsf:` 读取，每层只写 sr_ratio 或分支下标；模块构造支持 kwargs。
+- `train.py`（train_rgb_ir）：LayerNorm 的 weight 归入不衰减组（推断）；没被 pg0/1/2 收集的参数（CMFC λ）补进不衰减组，日志打印 "Optimizer: N extra parameter tensors"。
+- `tools\check_model.py`：融合类型默认加上 PairAdd；新增 flop_counter GFLOPs（thop 统计不到 CMFC 内部的矩阵乘法）；打印 CMFC 分支权重。
+- 新 yaml（models\ccsfuse\）：`yolov5m_ccsfuse.yaml`（完整版，Table I 第 4 行）、`yolov5m_cmfc_add.yaml`（第 2 行）、`yolov5m_afsf.yaml`（第 3 行）。完整版主干按 stage 交错：RGB s3、IR s3、CMFC_3、两路 Inject、RGB s4 ……；AFSF 直接取 CMFC 输出的一对特征；pretrain_map 为 rgb [0-4,13,14,20,21,22]、ir [5-9,15,16,23,24,25]、neck [30..43]。
+
+check_model.py（batch 4，AMP，真实 batch）：
+| 配置 | 参数量 | GFLOPs（thop / flop_counter） | 峰值显存 |
+|---|---|---|---|
+| 基线 Add | 33.43 M | 84.3 / 83.7 | 2.24 GiB |
+| +CMFC | 53.79 M | 93.4 / 94.5 | 3.37 GiB |
+| +AFSF | 38.08 M | 87.2 / 86.5 | 2.34 GiB |
+| 完整版 | 58.45 M | 96.3 / 97.3 | 3.45 GiB |
+- 四个配置都是 rgb 306/306、ir 306/306；融合层和 Detect 形状正确；loss 和梯度有限；λ 初始为 0.5/0.5。
+
+1% 子集过拟合，完整版（lr0=0.01，30 epoch，warmup 1 epoch / 45 步），runs\train\overfit_ccsfuse_m：
+- 日志显示 "3 extra parameter tensors"，即 3 个 λ 进了优化器；COCO 权重迁移正常；
+- loss 0.273→0.125（基线同设置为 0.269→0.127）；mAP50 0.384（基线 0.456；新增约 2500 万随机初始化参数，小数据上偏慢，不作为判断依据）；
+- 训练后 λ：CMFC_3 w_SIC/w_RIS = 0.54/0.46，CMFC_4 0.51/0.49，CMFC_5 0.50/0.50，说明 λ 在更新；
+- 速度：0.171 h，基线 0.107 h，约慢 1.6 倍；显存 reserved 5.18 G。推算完整训练：完整版约 12.5 h，+CMFC 约 12 h，+AFSF 约 8–8.5 h。

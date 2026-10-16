@@ -556,10 +556,16 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     for k, v in model.named_modules():
         if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
             pg2.append(v.bias)  # biases
-        if isinstance(v, nn.BatchNorm2d):
+        if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)):  # CCSFuse: LayerNorm (CMFC SR) no decay, 推断
             pg0.append(v.weight)  # no decay
         elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
             pg1.append(v.weight)  # apply decay
+    # CCSFuse: parameters not named weight/bias (CMFC lambdas) are missed above -> add them without decay
+    grouped = {id(p) for p in pg0 + pg1 + pg2}
+    extra = [p for p in model.parameters() if id(p) not in grouped]
+    pg0.extend(extra)
+    if extra:
+        logger.info(f'Optimizer: {len(extra)} extra parameter tensors (e.g. CMFC lambdas) added to the no-decay group')
 
     if opt.adam:
         optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
