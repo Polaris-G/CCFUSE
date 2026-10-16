@@ -1,4 +1,4 @@
-# CCSFuse 复现项目
+﻿# CCSFuse 复现项目
 
 ## 项目目标
 复现 CCSFuse（Zhang et al., IEEE TGRS 2026, Art. no. 5400314，UAV RGB-IR 目标检测：CMFC + AFSF，基于 YOLOv5 双流）。
@@ -163,11 +163,17 @@
     - lr0=0.01：loss 0.275→0.104，mAP50 0.47，car 类 0.97，见 runs\train\overfit_add_m_lr01；
     - 每 epoch 约 14 秒（含验证），训练显存 3.3 GB。
   - 用户已在本地运行 check_model.py。
-- **方案第 7 节第 2 步（数据管线）已完成，尚未提交**（会话 3，详见 WORKLOG）：
+- **方案第 7 节第 2 步（数据管线）已完成**（commit 5f70fc2）（会话 3，详见 WORKLOG）：
   - 非 Mosaic 分支恢复 random_perspective_rgb_ir（两路共用矩阵）；新增 hyp `hsv_ir`，默认 none；新增 tools\check_aug.py。
   - check_aug.py 三项检查全部通过；可视化图在 runs\viz\aug_pairs.jpg。
   - 1% 过拟合复跑（lr0=0.01）：loss 0.269→0.127，mAP50 0.456（无增强时为 0.104 / 0.472），见 runs\train\overfit_add_m_lr01_aug。
-- 下一步：第 3 步，用完整训练集训练基线（约 1–1.5 天），对标 Table I 第 1 行的 72.8。第 4、5 步时注意：CMFC 的 λ 是单独定义的 nn.Parameter，train.py 的优化器分组（pg0/pg1/pg2）收集不到它，需要单独加进优化器。
+- 断点续训已用 1% 子集测试通过（强制结束后执行 `python train.py --resume runs\train\<name>\weights\last.pt`，epoch、hyp-set、优化器、EMA 都能恢复）。
+- **第 3 步（完整训练集基线）已训练完**（用户在 VS Code 中运行，约 7.8 h）：runs\train\baseline_add_m。
+  - test 集 mAP50 **67.3**（论文 72.8）：car 97.7、truck 68.8、freight car 46.6、bus 94.3、van 28.8。差距全部来自 van（51% 被判成 car）和 freight car（42% 被判成 truck）。详见 WORKLOG。
+  - test 评估命令：`python test.py --weights <best.pt> --data data/multispectral/DroneVehicle_test.yaml --batch-size 8 --iou-thres 0.6 --task test --verbose --name <名字>`（必须显式写 `--iou-thres 0.6`，test.py 命令行默认 0.5；运行约 16 分钟）。
+  - 用户决定：接受 67.3 作为自己的基线，后续按相对提升评判（方案第 6 节的判定标准）。
+- **长时间训练一律交给用户在自己电脑上运行**（用户要求）：给出完整命令、监控方法、续训命令，等用户贴回结果。
+- 第 4、5 步时注意：CMFC 的 λ 是单独定义的 nn.Parameter，train.py 的优化器分组（pg0/pg1/pg2）收集不到它，需要单独加进优化器。
 - 后台训练：无（2026-10-15 04:00 核实，没有 python 进程在运行）。
 - 用户待办：手动删除 D:\CCSFuse_wheels（约 2.4 GB）。
 
@@ -175,6 +181,7 @@
 - CFT 原来的权重加载（intersect_dicts 按键名）只给 RGB 主干加载 COCO 权重，IR 主干（第 10–19 层）是随机初始化，但日志里的 "Transferred 306/812" 看上去正常。已用 load_coco_dual_stream 修复。
 - 新版环境下 CFT 有三处直接崩溃，已修复（详见"代码库"）：setuptools 84 没有 pkg_resources；loss 中 clamp_ 的 dtype 错误；test.py 把 6 通道图像传给画图函数。其中画图的错误发生在后台线程，只打印 Traceback，不会中断训练。
 - CFT 用 `open()` 读 yaml 时不指定编码，中文 Windows 默认按 GBK 解码。含中文注释的 yaml 必须按 UTF-8 读，已在 train/test/yolo_test 中修改。
+- 学习率调度滞后一个 epoch（YOLOv5/CFT 原有行为，不改）：train.py 第 684 行 `scheduler.last_epoch = start_epoch - 1`，加上新版 torch 的 LambdaLR 在创建时已经执行过一次 step，第 e 个 epoch 用的是 lf(e−1)。不中断训练和续训都是这样；tensorboard 中 x/lr0 的记录即为实际值。
 - results.txt 每行 8 个指标依次为：P、R、mAP50、mAP75、mAP50:95、val box/obj/cls。CFT 比 YOLOv5 多了 mAP75。
 - lr0=0.001（论文值）时，1% 子集 30 epoch 的 mAP50 只到 0.12。原因是优化步数少（约 450 步），不是 bug；用 lr0=0.01 可以快速过拟合。
 - 1% 子集这样的小数据跑 YOLOv5 时，warmup 默认至少 1000 步，会占满整个训练。用 `--hyp-set warmup_epochs=1 warmup_min_iters=45` 缩短。

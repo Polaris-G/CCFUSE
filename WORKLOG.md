@@ -458,3 +458,34 @@ runs\train\overfit_add_m_lr01_aug，日志 runs\overfit_aug.log：
 | 无增强（第 1 步） | 0.275→0.104 | 0.472 | 0.228 |
 | 新增强 | 0.269→0.127 | 0.456 | 0.211 |
 - loss 持续下降；加了增强后训练集更难拟合，末尾 loss 略高，符合预期。30 epoch 共 0.107 h，显存 3.45G（reserved）。
+
+## 会话 3：断点续训测试（2026-10-15）
+
+方法：1% 子集，5 epoch（lr0=0.01，warmup_epochs=1，warmup_min_iters=45），跑完 2 个 epoch 后用 taskkill /T /F 强制结束（模拟睡眠或崩溃），再执行 `python train.py --resume runs\train\resume_test\weights\last.pt`。
+
+结果：**续训可用**。
+- 从 epoch 2 接着跑，"3 epochs completed"，results.txt 共 5 行，退出码 0；
+- `--hyp-set` 的覆盖值（lr0=0.01、hsv_ir=none）通过 opt.yaml 保留下来；Transferred 812/812，优化器、EMA、调度器都已恢复；
+- 学习率：续训后第 e 个 epoch 的学习率是 lr0×lf(e−1)，看上去慢了一个 epoch。但在不中断的 30 epoch 训练（overfit_add_m_lr01_aug）中，从 epoch 2 起也是 lf(e−1)。
+  - 原因：train.py 第 684 行 `scheduler.last_epoch = start_epoch - 1`，加上新版 torch 的 LambdaLR 在创建时已经执行过一次 step，所以 scheduler.step() 总是滞后一个 epoch。epoch 1 恰好由 warmup 的最后一步（ni=nw）设成 lf(1)，因此看不出来。
+  - 这是 YOLOv5/CFT 原有的行为，续训与不中断训练一致，**保持不改**。影响：最后一个 epoch 的学习率是 lf(E−2) 而不是 lf(E−1)，对 45 epoch 的训练影响很小。
+- 测试产物（resume_test、resume_test2 目录和日志）已删除。
+
+## 会话 3：第 3 步，完整训练集基线（2026-10-15）
+
+训练由用户在 VS Code 终端运行：`python train.py --name baseline_add_m`（默认配置，45 epoch，batch 4，nbs 12，lr0 0.001）。04:38→12:24，约 7.8 h，每 epoch 约 10 分钟（5.5 it/s）。
+- val 集 mAP50：0.072（epoch 0）→ 0.670（epoch 44），到最后仍在缓慢上升（每 epoch +0.001~0.002），没有过拟合。
+
+test 集评估（我运行，约 16 分钟，主要耗时在 test.py 默认写出 8979 个 txt）：
+`python test.py --weights runs/train/baseline_add_m/weights/best.pt --data data/multispectral/DroneVehicle_test.yaml --batch-size 8 --iou-thres 0.6 --task test --verbose --name baseline_add_m_test`
+- 注意：test.py 命令行的 `--iou-thres` 默认是 0.5（CFT 改的），训练时的验证和 YOLOv5 标准都用 0.6，这里显式指定 0.6。
+
+| | mAP50 | car | truck | freight car | bus | van |
+|---|---|---|---|---|---|---|
+| 本复现 baseline（test） | **67.3** | 97.7 | 68.8 | 46.6 | 94.3 | 28.8 |
+| 论文 Table I 第 1 行 | 72.8 | – | – | – | – | – |
+| 论文 +CMFC（参考） | 76.8 | 96.5 | 68.8 | 64.8 | 93.2 | 60.6 |
+
+- 差距 5.5 点，**全部来自 freight car 和 van**；car、truck、bus 与论文 +CMFC 行持平甚至更高。
+- 混淆矩阵（runs\train\baseline_add_m\confusion_matrix.png，val 集）：van 51% 被判成 car（只有 20% 判对，召回率 0.17）；freight car 42% 被判成 truck（35% 判对）。漏检比例低，说明问题出在分类，不在定位。
+- 其他：mAP50:95 0.456，推理速度 11.3 ms/张（batch 8）。
