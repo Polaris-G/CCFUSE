@@ -185,7 +185,10 @@
   - 速度约为基线的 1/1.6。推算完整训练：完整版约 12.5 h，+CMFC 约 12 h，+AFSF 约 8–8.5 h（都由用户自己运行）。
   - train.py 会把 λ 补进优化器的不衰减组（日志中有 "Optimizer: 3 extra parameter tensors"）。
   - test.py（attempt_load + Conv/BN 融合）能正常评估新模型；推理 39 ms/张，基线为 11 ms/张，主要因为注意力在 fp32 下计算。
-- 下一步：第 7 步，按 Table I 顺序跑消融（+CMFC → +AFSF → 完整版），由用户在 VS Code 中运行，每次结束后用 test 集评估。
+- **第 7 步进行中**：用户决定按"完整版 → +CMFC → +AFSF"的顺序跑消融（先看最关键的结果），每组结束后用 test 集评估。
+  - 完整版 runs\train\ccsfuse_m 已训练完：**test mAP50 66.1，比基线低 1.2**（论文 +6.6）；freight car −4.3，van −1.4，其余持平。val 曲线从 epoch 20 起落后。λ 几乎没动（约 0.5/0.5）。
+  - 诊断：CMFC 初始化时补偿量就达到原特征的 50–66%（‖Δ‖/‖f‖），通过回注方式 A 破坏了 COCO 预训练的 stage4/5；ReLU² 分支幅值大于 Softmax 分支。候选改法：输出投影零初始化（推荐）、ris_norm。详见 WORKLOG。
+  - **用户选了方案 1**：CMFC 新增 proj_init: zero（输出投影零初始化，初始为恒等映射），完整版和 +CMFC 的 yaml 已改。下一步：用户重训完整版 --name ccsfuse_m_zinit。
 - **长时间训练一律交给用户在自己电脑上运行**（用户要求）：给出完整命令、监控方法、续训命令，等用户贴回结果。
 - 第 6 步时注意：CMFC 的 λ 是单独定义的 nn.Parameter，train.py 的优化器分组（pg0/pg1/pg2）收集不到它，需要单独加进优化器。
 - 后台训练：无（2026-10-15 04:00 核实，没有 python 进程在运行）。
@@ -211,4 +214,5 @@
 - CFT 原来的 hyp.scratch.yaml 中 mosaic=1.0。CCSFuse 用的 hyp.ccsfuse_dronevehicle.yaml 中 mosaic=0。
 - D:\CCSFuse\utils\datasets.py 第 897 行的 `assert (a, b), ...` 恒为真，空数据集不会报错（会打印 SyntaxWarning，不影响运行）。
 - 用 PowerShell 删除盘符根目录下的文件夹会被工具的安全规则拦截，需要用户手动删除。
+- train.py 曾在工作区被意外改动（2026-10-17，第 6 步的优化器分组被撤回，用户不知情），已用 git checkout 恢复。**每次开始长时间训练前先跑 git status，确认没有意外改动**；训练日志开头应有 Optimizer: 3 extra parameter tensors（含 CMFC 的模型）。
 - 在 Python 中读取下载的数据时用 `python -I`，脚本不要放在数据目录里。

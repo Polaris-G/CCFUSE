@@ -21,6 +21,7 @@ cmfc:
   ris_norm: False  # divide ReLU^2 branch by M
   attn_fp32: True  # attention math in fp32 under AMP
   branch_weights: null  # null = learnable lambdas; [1, 0] / [0, 1] / [0.5, 0.5] = Table II fixed weights
+  proj_init: zero  # zero = out_proj starts at 0 -> CMFC is the identity at init; default = PyTorch init (run ccsfuse_m)
 cmfc_inject: A  # A: next stage input = f^CMFC ; B: stage output + f^CMFC
 afsf:
   reduction: 4  # MLP hidden = 2C / reduction

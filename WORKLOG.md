@@ -555,3 +555,48 @@ check_model.py（batch 4，AMP，真实 batch）：
 - loss 0.273→0.125（基线同设置为 0.269→0.127）；mAP50 0.384（基线 0.456；新增约 2500 万随机初始化参数，小数据上偏慢，不作为判断依据）；
 - 训练后 λ：CMFC_3 w_SIC/w_RIS = 0.54/0.46，CMFC_4 0.51/0.49，CMFC_5 0.50/0.50，说明 λ 在更新；
 - 速度：0.171 h，基线 0.107 h，约慢 1.6 倍；显存 reserved 5.18 G。推算完整训练：完整版约 12.5 h，+CMFC 约 12 h，+AFSF 约 8–8.5 h。
+
+## 会话 3：完整版显存与 batch 的关系（2026-10-18，用于评估服务器配置）
+
+check_model.py（完整版 yolov5m_ccsfuse，AMP，前向加反向峰值 allocated）：batch 2 / 4 / 6 = 1.90 / 3.45 / 5.00 GiB，线性：约 0.35 + 0.775 × batch GiB。
+- 训练时还要加上 SGD momentum 和 EMA（各约 0.22 GiB，共 0.44 GiB）；PyTorch 缓存使 reserved 比 allocated 多 10–35%（本机 batch 4 实测 reserved 4.29–5.18G）。
+- 预测（AMP）：论文设置（每卡 6，2 卡）→ 每卡 allocated 约 5.4 GiB，reserved 约 6–7.5 GB；单卡 batch 12 → allocated 约 10.1 GiB，reserved 约 11–13.5 GB。不开 AMP 时激活显存约多 1.5–2 倍。
+
+## 会话 3：第 7 步，完整版 CCSFuse 结果（2026-10-20）
+
+训练：用户在 VS Code 中运行 `train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m`，45 epoch，于 2026-10-16 10:37 完成。
+test 集评估（我运行，21 分钟）：runs\test\ccsfuse_m_test，日志 runs\ccsfuse_m_test.log。
+
+| | mAP50 | car | truck | freight car | bus | van | mAP50:95 |
+|---|---|---|---|---|---|---|---|
+| 基线 Add（test） | 67.3 | 97.7 | 68.8 | 46.6 | 94.3 | 28.8 | 45.6 |
+| **CCSFuse 完整版（test）** | **66.1** | 97.6 | 68.9 | 42.3 | 94.4 | 27.4 | 44.8 |
+| 差值 | **−1.2** | −0.1 | +0.1 | −4.3 | +0.1 | −1.4 | −0.8 |
+| 论文差值（79.4 − 72.8） | +6.6 | | | | | | |
+
+- val 曲线：前 16 个 epoch 与基线持平，从 epoch 20 起落后，最后 0.646 对 0.670（−2.4）。训练 loss 一直略低于基线，说明拟合训练集更好、泛化更差。
+- λ 几乎没学动：w_SIC/w_RIS 在 stage3/4/5 分别为 0.555/0.445、0.509/0.491、0.484/0.516。
+
+### 诊断：CMFC 在初始化时就严重扰乱了预训练特征
+用 4 张 val 图测 ‖Δ‖/‖f‖（Δ 为 CMFC 加到特征上的补偿量）：
+| CMFC | COCO 初始化时 rgb / ir | 训练后 rgb / ir |
+|---|---|---|
+| stage3 | 0.59 / 0.50 | 0.52 / 1.19 |
+| stage4 | 0.58 / 0.48 | 0.56 / 0.45 |
+| stage5 | 0.65 / 0.66 | 0.66 / 0.34 |
+- 回注方式 A 下，补偿量直接成为 COCO 预训练 stage4/5 的输入。随机初始化的输出投影从第一步起就加入了相当于原特征 50–66% 的扰动，预训练特征被破坏。
+- 两个分支的权重各占一半，但 ReLU² 分支的输出幅值普遍大于 Softmax 分支（没有归一化）。
+- 候选改法（都是论文未给出的实现细节，需要重训约 13 h）：(1) 输出投影零初始化，使 CMFC 初始为恒等映射（推荐）；(2) `ris_norm: True` 平衡两个分支的幅值。
+
+## 会话 3：方案 1，CMFC 输出投影零初始化（2026-10-20）
+
+- `CMFC(proj_init='default'|'zero')`（推断）：设为 zero 时，proj_rgb/proj_ir 的 weight 和 bias 都初始化为 0，CMFC 初始为恒等映射。构造函数默认仍是 default，ccsfuse_m 的权重不受影响。
+- yaml：完整版和 +CMFC 的 `cmfc:` 中加入 `proj_init: zero`。
+- test_cmfc.py 新增一项：初始时输出 == 输入；proj 立即有梯度，Q/K/V 在一次更新后有梯度。全部通过。
+- 真实网络（COCO 初始化）中三个 CMFC 的 ‖Δ‖/‖f‖ = 0.00。
+- 1% 子集过拟合（runs\train\overfit_ccsfuse_m_zinit）：loss 0.274→0.125，mAP50 0.382，与之前的 0.384 相当，零初始化不妨碍学习。注意：这次是在被意外改动的 train.py 上跑的（见下），λ 没有参与训练，只作为能否正常学习的检查。
+
+### train.py 被意外改动（已恢复）
+- 2026-10-17 01:26，train.py 在工作区被改动（用户确认不是有意操作，推测是 VS Code 中误操作或撤销过头）：第 6 步的优化器分组代码被撤回（λ 不进优化器、LayerNorm 被施加 weight decay），注释中还多了两个空格（`# SyncBa  tchNorm`）。
+- 不影响 ccsfuse_m：它在 10-15 启动、10-16 结束，启动日志中有 "3 extra parameter tensors"，λ 也从 1.0 变成了 1.11/0.889 等值，确实参与了训练。
+- 用 `git checkout -- train.py` 恢复后，1 epoch 检查中日志重新出现 "3 extra parameter tensors"，分组为 188/182/146。

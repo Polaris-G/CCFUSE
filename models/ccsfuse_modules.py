@@ -53,10 +53,13 @@ class CMFC(nn.Module):
         attn_fp32: compute QK^T, both branches and @V in fp32 even under AMP (ReLU^2 is unnormalized).
         branch_weights: None = learnable lambdas (paper). A fixed (w_SIC, w_RIS) pair, e.g. (1, 0) Softmax only,
             (0, 1) ReLU^2 only, (0.5, 0.5), reproduces the Table II ablations; no lambda is created then.
+        proj_init: 'default' (PyTorch Linear init) or 'zero' (weight and bias of out_proj = 0, so CMFC starts as
+            the identity and the COCO-pretrained stages after it see unchanged features; needs out_proj=True).
+            With 'default' the compensation was 50-66% of |f| at init and hurt the result (WORKLOG, step 7).
     """
 
     def __init__(self, c, num_heads=8, sr_ratio=4, out_proj=True, share_lambda=True, ris_norm=False,
-                 attn_fp32=True, branch_weights=None):
+                 attn_fp32=True, branch_weights=None, proj_init='default'):
         super().__init__()
         num_heads = max(c // 64, 1) if num_heads == 'auto' else int(num_heads)
         assert c % num_heads == 0, f'CMFC: channels {c} not divisible by num_heads {num_heads}'
@@ -67,6 +70,11 @@ class CMFC(nn.Module):
         self.qkv_ir = _ModalityQKV(c, sr_ratio)
         self.proj_rgb = nn.Linear(c, c) if out_proj else nn.Identity()
         self.proj_ir = nn.Linear(c, c) if out_proj else nn.Identity()
+        assert proj_init in ('default', 'zero'), f'CMFC proj_init must be default|zero, got {proj_init}'
+        if proj_init == 'zero':  # 论文未给出，推断: zero-init the compensation branch (identity at start)
+            assert out_proj, 'CMFC proj_init=zero needs out_proj=True'
+            for p in (self.proj_rgb.weight, self.proj_rgb.bias, self.proj_ir.weight, self.proj_ir.bias):
+                nn.init.zeros_(p)
         if branch_weights is None:
             # Eq. (4): learnable branch logits, init 1 -> w_SIC = w_RIS = 0.5.
             # NOTE: plain nn.Parameter, not collected by YOLOv5's pg0/pg1/pg2; train.py adds leftover params.

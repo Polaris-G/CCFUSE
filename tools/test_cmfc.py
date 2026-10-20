@@ -105,7 +105,24 @@ check('grad: rgb output -> both inputs and lambda', a.grad.abs().sum() > 0 and b
       and m.lambda_rgb.grad is not None and m.lambda_rgb.grad.abs().sum() > 0,
       f'|dL/d lambda| = {m.lambda_rgb.grad.abs().tolist()}')
 
-# 6. memory at training scale: batch 4, the three YOLOv5m stages, AMP, fwd + bwd
+# 6. proj_init='zero': identity at init; proj gets gradient now, Q/K/V after one optimizer step
+m = CMFC(192, sr_ratio=8, proj_init='zero').to(dev).train()
+a = torch.randn(2, 192, 80, 80, device=dev, requires_grad=True)
+b = torch.randn(2, 192, 80, 80, device=dev, requires_grad=True)
+o_rgb, o_ir = m(a, b)
+ident = torch.equal(o_rgb, a) and torch.equal(o_ir, b)
+(o_rgb.pow(2).mean() + o_ir.pow(2).mean()).backward()
+g_proj = m.proj_rgb.weight.grad.abs().sum().item()
+opt = torch.optim.SGD(m.parameters(), lr=0.1)
+opt.step()
+opt.zero_grad()
+o_rgb, o_ir = m(a, b)
+(o_rgb.pow(2).mean() + o_ir.pow(2).mean()).backward()
+g_q = m.qkv_rgb.q.weight.grad.abs().sum().item()
+check("proj_init='zero': output == input at init, proj then Q/K/V get gradients", ident and g_proj > 0 and g_q > 0,
+      f'|grad proj| {g_proj:.3g}, |grad q| after 1 step {g_q:.3g}')
+
+# 7. memory at training scale: batch 4, the three YOLOv5m stages, AMP, fwd + bwd
 if dev.type == 'cuda':
     ms = [CMFC(c, sr_ratio=r).to(dev) for c, r in ((192, 8), (384, 4), (768, 2))]
     xs = [(torch.randn(4, c, s, s, device=dev, requires_grad=True),
