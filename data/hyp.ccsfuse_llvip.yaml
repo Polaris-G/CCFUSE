@@ -1,0 +1,41 @@
+# CCSFuse hyperparameters for LLVIP (paper Sec. IV-B).
+# 【论文】 与 DroneVehicle 相同，但优化器改为 Adam、初始学习率 0.0001。
+# 优化器不在 yaml 里：训练必须加 --adam，否则会用 SGD 配这个 lr0。
+#   python train.py --data data/multispectral/LLVIP_ccsfuse.yaml \
+#       --hyp data/hyp.ccsfuse_llvip.yaml --adam \
+#       --batch-size 12 --workers 8 --device 0 --nbs 12
+# --adam 时 beta1 = momentum（0.9）；beta2=0.999 论文未给出，推断（PyTorch 默认）。
+# 其余键与 data/hyp.ccsfuse_dronevehicle.yaml 相同，标注含义也相同。
+
+lr0: 0.0001  # 【论文】 LLVIP initial learning rate (Adam)
+lrf: 0.01  # 论文未给出，推断: cosine multiplier ends at lrf; final lr = lr0 * lrf (YOLOv5 one_cycle)
+momentum: 0.9  # 【论文】 与 DroneVehicle 相同；--adam 时作为 Adam beta1
+nesterov: False  # 论文未给出，推断: 只对 SGD 有效；LLVIP 用 --adam 时忽略
+weight_decay: 0.0005  # 论文未给出，推断: 与 DroneVehicle 相同；再乘 batch*accumulate/nbs
+warmup_epochs: 3.0  # 论文未给出，推断: 与 DroneVehicle 相同
+warmup_min_iters: 1000  # 论文未给出，推断: 与 DroneVehicle 相同
+warmup_momentum: 0.8  # 论文未给出，推断: 只插值 SGD 的 momentum；Adam 的 beta 不参与
+warmup_bias_lr: 0.01  # 论文未给出，推断: 与 DroneVehicle 相同（数值是 DroneVehicle lr0 的 10 倍，不是本文件 lr0 的 10 倍）
+box: 0.05  # 论文未给出，推断: YOLOv5 默认损失增益
+cls: 0.5
+cls_pw: 1.0
+obj: 1.0
+obj_pw: 1.0
+iou_t: 0.20
+anchor_t: 4.0
+fl_gamma: 0.0
+
+# Augmentation. 【论文】 与 DroneVehicle 相同：horizontal flip, random crop, color jitter.
+hsv_h: 0.015  # 论文未给出，推断: YOLOv5 默认颜色抖动强度
+hsv_s: 0.7
+hsv_v: 0.4
+hsv_ir: none  # 论文未给出，推断: 只抖动 RGB
+degrees: 0.0  # 论文未给出，推断: 关闭
+translate: 0.1  # 论文未给出，推断: random crop 的平移幅度
+scale: 0.5  # 论文未给出，推断: random crop 的缩放幅度
+shear: 0.0  # 论文未给出，推断: 关闭
+perspective: 0.0  # 论文未给出，推断: 关闭
+flipud: 0.0  # 论文未给出，推断: 关闭
+fliplr: 0.5  # 【论文】 horizontal flip；概率 0.5 论文未给出，推断
+mosaic: 0.0  # 论文未给出，推断: 关闭
+mixup: 0.0  # 论文未给出，推断: 关闭（双流分支里 mixup 代码已注释）

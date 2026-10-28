@@ -2,6 +2,9 @@
 # 12,025 train / 3,463 test pairs, single class, shared annotations on both sides.
 # LLVIP has no val split: validation and final evaluation both use test (as in the paper).
 # Paths are relative to the repo root (run from ~/bzp/CCFUSE). Datasets sit beside the repo at ~/bzp/datasets.
+# 【论文】 Adam, lr 0.0001. This file is only the data paths. Train with
+#   --hyp data/hyp.ccsfuse_llvip.yaml --adam
+# and on the lab server also --batch-size 12 --workers 8 --device 0 --nbs 12.
 
 train_rgb: ../datasets/LLVIP/rgb/images/train
 val_rgb: ../datasets/LLVIP/rgb/images/test

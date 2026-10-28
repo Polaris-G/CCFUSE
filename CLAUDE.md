@@ -48,24 +48,25 @@
 - 自检：`python check_env.py`，应输出 `ALL CHECKS PASSED`。显存下限是当前这张卡总显存的 70%（8 GB 卡约 5.6 GB，16 GB 卡约 11.2 GB），并检查当前算力是否在 `torch.cuda.get_arch_list()` 里。
 - `import cv2` 若报缺 `libGL.so.1`：`sudo apt-get install -y libgl1`。
 
-`train.py` 的默认 `--batch-size 4`、`--workers 2`、`--nbs 12` 仍是 8 GB 笔记本的设置，论文相关默认值没有改。服务器上要显式加上设备、batch 和 workers。
+`train.py` 的默认 `--batch-size 4`、`--workers 2`、`--nbs 12` 仍是 8 GB 笔记本的设置。完整版显存大约 `0.35 + 0.775 × batch` GiB（allocated），batch 12 约 9.7 GiB，超过笔记本可分配的约 7.25 GB，所以默认 batch 保持 4。epoch、学习率、SGD 这些论文默认值没有改。服务器上要显式加上设备、batch 和 workers。
 
 `nbs` / `accumulate`（只看实际在用的 `train_rgb_ir`）：
 
 - `accumulate = max(round(nbs / batch_size), 1)`，有效 batch = `batch_size × accumulate`。
 - `weight_decay` 再乘 `batch_size * accumulate / nbs`。这个系数为 1 时，衰减和名义 batch 一致。
-- 笔记本：batch 4、nbs 12 → accumulate 3，有效 batch 12，weight_decay 系数 1。已有结果是这个口径。
-- 只写 `--batch-size 16`、nbs 仍是默认 12：`round(12/16)=1`，accumulate 为 1，有效 batch 变成 16，weight_decay 系数变成 16/12 ≈ 1.33，和笔记本不是同一组超参。
-- `--batch-size 16 --nbs 16`：accumulate 1，weight_decay 系数回到 1，但有效 batch 是 16。Table I 要四组一起按这个口径重跑才能互相比较。完整版显存大约 `0.35 + 0.775 × batch` GiB（allocated）；batch 16 约 12.8 GiB。16 GB 卡上若 OOM，改为 `--batch-size 12 --nbs 12`（有效 batch 12，系数 1，和已有结果、论文的 2×6 同一量级）。
+- 笔记本：batch 4、nbs 12 → accumulate 3，有效 batch 12，weight_decay 系数 1。已有结果是这个口径。BN 每步看到的是 4 张图。
+- 服务器：`--batch-size 12 --nbs 12` → accumulate 1，有效 batch 12，weight_decay 系数 1，和论文总 batch（2 卡 × 6）以及笔记本的有效 batch 同一口径。BN 每步看到的是 12 张图。
+- 论文是 2 卡 DDP、每卡 batch 6，未写 SyncBN。两卡时每卡 BN 统计基于 batch 6；这里单卡 batch 12，BN 统计基于 12。
+- `--batch-size 16 --nbs 16` 的有效 batch 是 16，和论文总 batch 12 不是同一口径。Table I 四组都用 12 / 12。
 
-服务器推荐命令（有效 batch 16，weight_decay 系数 1）：
+服务器推荐命令（有效 batch 12，weight_decay 系数 1）：
 
 ```bash
 python train.py --cfg models/ccsfuse/<配置>.yaml --name <名字> \
-    --batch-size 16 --workers 8 --device 0 --nbs 16
+    --batch-size 12 --workers 8 --device 0 --nbs 12
 ```
 
-tmux 长训练：
+tmux 长训练（DroneVehicle，SGD，lr 0.001）：
 
 ```bash
 tmux new -s ccsfuse
@@ -73,7 +74,16 @@ source /opt/miniforge3/etc/profile.d/conda.sh && conda activate ccsfuse
 cd ~/bzp/CCFUSE
 git status --short
 python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_zinit \
-    --batch-size 16 --workers 8 --device 0 --nbs 16
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
+LLVIP（Adam，lr 0.0001，其余超参同 DroneVehicle；必须同时写 `--hyp` 和 `--adam`）：
+
+```bash
+python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip \
+    --data data/multispectral/LLVIP_ccsfuse.yaml \
+    --hyp data/hyp.ccsfuse_llvip.yaml --adam \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
 ```
 
 脱离会话：Ctrl-b 然后 d。回来：`tmux attach -t ccsfuse`。续训：`python train.py --resume runs/train/<名字>/weights/last.pt`（在同一套 batch / nbs 下恢复）。
@@ -124,7 +134,7 @@ python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_zinit
   - utils\ccsfuse.py：`load_coco_dual_stream()`，按 yaml 中的 `pretrain_map` 把 COCO 主干权重复制到两路；`--pretrain-neck` 时也复制 neck。
   - models\ccsfuse\yolov5m_dual_add.yaml（基线，Table I 第 1 行；调试用 yolov5s_dual_add.yaml）
   - models\ccsfuse\yolov5m_ccsfuse.yaml（完整版，第 4 行）、yolov5m_cmfc_add.yaml（+CMFC，第 2 行）、yolov5m_afsf.yaml（+AFSF，第 3 行）
-- 配置：data\hyp.ccsfuse_dronevehicle.yaml（论文超参，推断项已标注）；data\multispectral\ 下的 DroneVehicle.yaml、DroneVehicle_test.yaml、LLVIP_ccsfuse.yaml、DroneVehicle_1pct.yaml（及其 txt 列表）。
+- 配置：data\hyp.ccsfuse_dronevehicle.yaml（DroneVehicle 超参，推断项已标注）；data\hyp.ccsfuse_llvip.yaml（LLVIP：Adam 用的 lr0=0.0001，其余同 DroneVehicle，训练时加 `--adam`）；data\multispectral\ 下的 DroneVehicle.yaml、DroneVehicle_test.yaml、LLVIP_ccsfuse.yaml、DroneVehicle_1pct.yaml（及其 txt 列表）。
 - 工具（tools\）：prepare_dronevehicle.py、prepare_llvip.py、viz_pairs.py、check_loader.py、check_weights.py、check_model.py、make_subset.py、check_aug.py、test_cmfc.py、test_afsf.py；根目录 check_env.py、requirements-ccsfuse.txt。
 
 ## CCSFuse 模块的实现要点（推断项都在 yaml 中配置）
@@ -212,7 +222,7 @@ Windows 上转换后的数据在 `D:\CCSFuse\datasets\`。服务器上同一份�
 
 ## 常用命令
 Windows 笔记本：在 `D:\CCSFuse` 下运行，python 指 `D:\Miniconda\envs\ccsfuse\python.exe`，用默认 batch 4 / workers 2 / nbs 12。
-服务器：在 `~/bzp/CCFUSE` 下运行，先 `conda activate ccsfuse`，训练命令加上 `--batch-size 16 --workers 8 --device 0 --nbs 16`（见「服务器（Linux）」）。
+服务器：在 `~/bzp/CCFUSE` 下运行，先 `conda activate ccsfuse`，训练命令加上 `--batch-size 12 --workers 8 --device 0 --nbs 12`（见「服务器（Linux）」）。
 - 训练（默认即基线和笔记本配置：yolov5m_dual_add.yaml、weights/yolov5m.pt、DroneVehicle.yaml、hyp.ccsfuse_dronevehicle.yaml、45 epoch、batch 4、nbs 12、workers 2，AMP 自动开启）：
   `python train.py --cfg models/ccsfuse/<配置>.yaml --name <名字>`
 - 续训：`python train.py --resume runs/train/<名字>/weights/last.pt`（已测试：epoch、hyp-set、优化器、EMA 都能恢复）
@@ -221,7 +231,7 @@ Windows 笔记本：在 `D:\CCSFuse` 下运行，python 指 `D:\Miniconda\envs\c
   - **必须显式写 `--iou-thres 0.6`**（test.py 命令行默认 0.5，与训练时的验证口径不一致）。
 - 1% 子集过拟合检查（约 10 分钟）：
   `python train.py --cfg <配置> --data data/multispectral/DroneVehicle_1pct.yaml --epochs 30 --hyp-set lr0=0.01 warmup_epochs=1 warmup_min_iters=45 --name overfit_<名字>`
-  - 服务器上同一条命令再加 `--batch-size 16 --workers 8 --device 0 --nbs 16`，放进 tmux。
+  - 服务器上同一条命令再加 `--batch-size 12 --workers 8 --device 0 --nbs 12`，放进 tmux。
 - 检查工具（正斜杠在 Windows 和 Linux 上都能用）：
   - `python tools/check_model.py --cfg <配置> [--batch-size N]`：权重迁移（应为 rgb 306/306、ir 306/306）、融合层和 Detect 的形状、loss、显存、参数量、GFLOPs（thop 和 flop_counter 两种）、CMFC 分支权重。
   - `python tools/test_cmfc.py`、`python tools/test_afsf.py`：单元测试，应输出 ALL ... TESTS PASSED。
@@ -232,7 +242,34 @@ Windows 笔记本：在 `D:\CCSFuse` 下运行，python 指 `D:\Miniconda\envs\c
 - 论文给出：SGD、lr0 0.001、momentum 0.9、45 epoch、batch 12（2 卡 × 6）。
 - 推断：lrf 0.01（YOLOv5 余弦退火，视作 One-Cycle）、nesterov False、weight_decay 5e-4、warmup 3 epoch 且最少 1000 步、warmup_bias_lr 0.01、mosaic 0、translate 0.1、scale 0.5、fliplr 0.5、HSV 用 YOLOv5 默认值、hsv_ir none。
 - 本机：batch 4 + 梯度累积 3 步（nbs 12），weight_decay 缩放系数为 1。
+- 服务器：`--batch-size 12 --nbs 12`，accumulate 1，系数 1。
 - neck 和 head 不加载 COCO 权重（论文只说主干用 COCO 预训练），可用 `--pretrain-neck` 打开。
+- LLVIP：`data/hyp.ccsfuse_llvip.yaml`，`lr0: 0.0001`，训练加 `--adam`（beta1 = momentum 0.9，beta2 0.999 为推断）。其余键与 DroneVehicle 相同。
+
+## 论文训练设置对照
+
+论文原文：Ubuntu 20.04、Python 3.8、PyTorch 2.0.1、两张 RTX 4090D；输入缩到 640×640；主干用 COCO 预训练；45 epoch；每卡 batch 6；DroneVehicle 用 SGD、momentum 0.9、初始学习率 0.001、One-Cycle；增强为水平翻转、随机裁剪、颜色变换。LLVIP 相同，优化器改为 Adam、学习率 0.0001。
+
+| 项 | 论文 | 代码当前值 | 对照 |
+|---|---|---|---|
+| 系统 / Python / PyTorch | Ubuntu 20.04，Python 3.8，PyTorch 2.0.1 | 服务器 Ubuntu 24.04，Python 3.10，torch 2.7.1+cu128。笔记本 Python 3.10.22，torch 2.5.1+cu124 | 环境差异，不改。5060 Ti（sm_120）要 cu128 的 torch，2.0.1 没有这个算力 |
+| GPU 与总 batch | 2×4090D，每卡 6，总 batch 12 | 服务器 `--batch-size 12 --nbs 12`（accumulate=1，有效 batch 12，weight_decay 系数 1）。`train.py` 默认 `--batch-size 4 --nbs 12`（accumulate 3，有效 batch 12） | 总 batch 与论文一致。默认 batch 保持 4：完整版 batch 12 约 9.7 GiB allocated，笔记本约 7.25 GB 可用，会 OOM |
+| BN | 两卡 DDP，未写 SyncBN | 单卡 batch 12 | 论文两卡时每卡 BN 基于 batch 6；单卡 batch 12 的 BN 基于 12。笔记本已有结果的 BN 基于 batch 4 |
+| 输入 | 640×640 | `--img-size 640 640`。letterbox：长边缩到 640，短边填充（DroneVehicle 裁边后 640×512，上下各填约 64 px） | 张量是 640×640，一致。填充而不是拉伸：论文未给出，推断 |
+| 主干初始化 | COCO 预训练 | `weights/yolov5m.pt`，`load_coco_dual_stream` 复制到两路主干。neck 默认不复制 | 主干一致。neck 不加载：论文未给出，推断（`--pretrain-neck`） |
+| Epoch | 45 | `--epochs 45` | 一致 |
+| DroneVehicle 优化器 | SGD，momentum 0.9 | SGD，`momentum: 0.9`，`nesterov: False` | momentum 一致。nesterov：论文未给出，推断为 False |
+| 初始学习率 | 0.001 | `lr0: 0.001` | 一致 |
+| 学习率调度 | One-Cycle | 默认 `one_cycle(1, lrf, epochs)`：余弦乘子从 1 到 `lrf=0.01`，再乘 lr0，用 LambdaLR。`--linear-lr` 默认关闭。另有线性 warmup | 默认是 YOLOv5 的余弦 one-cycle，线性开关是关的。`lrf` 和 warmup 长度：论文未给出，推断。调度类是 LambdaLR，未使用会先升后降的 `torch.optim.lr_scheduler.OneCycleLR` |
+| Warmup | 未单独写 | `warmup_epochs: 3`，`warmup_min_iters: 1000`，`warmup_momentum: 0.8`，`warmup_bias_lr: 0.01`。SGD momentum 在这段从 0.8 插到 0.9 | 论文未给出，推断 |
+| weight_decay | 未写 | `0.0005`，再乘 `batch*accumulate/nbs`。服务器上系数为 1 | 论文未给出，推断 |
+| 水平翻转 | 有 | `fliplr: 0.5`，两路同一次随机 | 有翻转，一致。概率 0.5：论文未给出，推断 |
+| 随机裁剪 | 有 | `translate: 0.1`、`scale: 0.5`，`random_perspective_rgb_ir` 两路共用一个矩阵（Mosaic 关闭时） | 用平移+缩放实现。幅度：论文未给出，推断 |
+| 颜色变换 | 有 | `hsv_h/s/v = 0.015/0.7/0.4`，`hsv_ir: none`（只动 RGB） | 有颜色变换，一致。强度和「只动 RGB」：论文未给出，推断 |
+| Mosaic、mixup、shear、perspective、flipud、旋转 | 未写 | hyp 里全是 0。双流 `__getitem__` 的 mixup 代码已注释，把 `mixup` 调大也不会执行 | 已关闭 |
+| 损失系数 | 未写（沿用 YOLOv5 损失） | box 0.05、cls 0.5、obj 1.0、iou_t 0.20、anchor_t 4.0 等 | 论文未给出，推断 |
+| AMP、workers | 未写 | CUDA 上 AMP 默认开。workers 默认 2；服务器命令写 8 | 论文未给出，推断 |
+| LLVIP | Adam，lr 0.0001，其余相同 | `data/hyp.ccsfuse_llvip.yaml` 的 `lr0: 0.0001`，其余键与 DroneVehicle 相同。命令加 `--adam`。`betas=(momentum, 0.999)`，beta1=0.9。warmup 不改 Adam 的 beta | 优化器和 lr 一致。beta2=0.999、eps、Adam 的 weight_decay：论文未给出，推断 |
 
 ## 实验结果（DroneVehicle test 集，mAP50 %）
 
@@ -259,7 +296,7 @@ Windows 笔记本：在 `D:\CCSFuse` 下运行，python 指 `D:\Miniconda\envs\c
     - 训练结束后由我在 test 集上评估，并读出最终的 λ。
   - 之后：若零初始化有效，再跑 +CMFC（`yolov5m_cmfc_add.yaml`，已是 proj_init zero）和 +AFSF（`yolov5m_afsf.yaml`，不含 CMFC，随时可以跑）；若仍不提升，试方案 2（ris_norm），并结合 +AFSF 的结果定位是哪个模块的问题。
 - 之后的步骤（方案第 7 节）：第 8 步 Table II 权重策略消融（`branch_weights`）；第 9 步 LLVIP（Adam，lr 1e-4）；第 10 步记录 λ 的变化曲线。
-- 服务器迁移：在 `server-linux` 分支。data yaml 和 1% 列表已改成相对路径；`torch.load` 显式 `weights_only=False`；安装脚本钉 torch 2.7.1+cu128。笔记本上已有的结果对应 batch 4、nbs 12（有效 batch 12）。服务器若改用 batch 16 / nbs 16（有效 batch 16）或论文的 batch 12，Table I 四组都要按同一口径重训才能比较。
+- 服务器迁移：在 `server-linux` 分支。data yaml 和 1% 列表已改成相对路径；`torch.load` 显式 `weights_only=False`；安装脚本钉 torch 2.7.1+cu128。笔记本上已有的结果对应 batch 4、nbs 12（有效 batch 12，BN 看到的是 4）。服务器训练用 `--batch-size 12 --nbs 12`（单卡，accumulate 1，有效 batch 12，与论文 2×6 的总 batch 相同；BN 看到的是 12）。Table I 四组都按这个口径。
 - 用户待办：手动删除 D:\CCSFuse_wheels（约 2.4 GB）。
 
 ## 踩过的坑（结论）
