@@ -1,19 +1,22 @@
 # CCSFuse hyperparameters for DroneVehicle (paper Sec. IV-B).
 # 【论文】 SGD, momentum 0.9, lr 0.001, One-Cycle schedule, 45 epochs, batch 12 (6/GPU x 2).
-# Everything marked 推断 is NOT given in the paper (论文未给出，推断) and may be changed, e.g. with
+# Everything marked 论文未给出，推断 is NOT in the paper and may be changed, e.g.
 #   python train.py --hyp-set lrf=0.1 warmup_epochs=1
-# Epochs / batch / gradient accumulation are command-line options (--epochs 45 --batch-size 4 --nbs 12).
+# Epochs are --epochs 45. Optimizer is SGD unless --adam (LLVIP).
+# Laptop (8 GB, default): --batch-size 4 --nbs 12 → accumulate 3, effective batch 12.
+# Lab server: --batch-size 12 --workers 8 --device 0 --nbs 12 → accumulate 1, effective batch 12.
+# Default batch stays 4: full-model batch 12 is ~9.7 GiB allocated, above the laptop's ~7.25 GiB.
 
 lr0: 0.001  # 【论文】 initial learning rate
-lrf: 0.01  # 推断: One-Cycle final lr = lr0 * lrf (YOLOv5 cosine 1 -> lrf)
-momentum: 0.9  # 【论文】 SGD momentum (also Adam beta1 with --adam)
-nesterov: False  # 推断: paper just says "SGD"; YOLOv5 default is Nesterov=True
-weight_decay: 0.0005  # 推断: YOLOv5 default; scaled by batch*accumulate/nbs as in YOLOv5
-warmup_epochs: 3.0  # 推断: YOLOv5 default (One-Cycle has a ramp-up phase)
-warmup_min_iters: 1000  # 推断: YOLOv5 forces >=1000 warmup iterations; lower it for tiny overfit runs
-warmup_momentum: 0.8  # 推断: YOLOv5 default
-warmup_bias_lr: 0.01  # 推断: YOLOv5 uses 10x lr0 (0.1 for lr0=0.01); kept at 10x lr0 here
-box: 0.05  # YOLOv5 default loss gains (paper uses YOLOv5 loss)
+lrf: 0.01  # 论文未给出，推断: cosine multiplier ends at lrf; final lr = lr0 * lrf (YOLOv5 one_cycle)
+momentum: 0.9  # 【论文】 SGD momentum；--adam 时作为 Adam beta1
+nesterov: False  # 论文未给出，推断: 论文只写 SGD；YOLOv5 默认 Nesterov=True，这里关掉
+weight_decay: 0.0005  # 论文未给出，推断: YOLOv5 默认；再乘 batch*accumulate/nbs
+warmup_epochs: 3.0  # 论文未给出，推断: YOLOv5 默认（One-Cycle 的爬升用这段线性 warmup 近似）
+warmup_min_iters: 1000  # 论文未给出，推断: YOLOv5 至少 1000 步；小子集过拟合时再调低
+warmup_momentum: 0.8  # 论文未给出，推断: YOLOv5 默认（只作用于 SGD 的 momentum）
+warmup_bias_lr: 0.01  # 论文未给出，推断: 保持为 10×lr0（YOLOv5 在 lr0=0.01 时用 0.1）
+box: 0.05  # 论文未给出，推断: YOLOv5 默认损失增益（论文沿用 YOLOv5 损失，未给系数）
 cls: 0.5
 cls_pw: 1.0
 obj: 1.0
@@ -23,16 +26,16 @@ anchor_t: 4.0
 fl_gamma: 0.0
 
 # Augmentation. 【论文】 horizontal flip, random crop, color jitter.
-hsv_h: 0.015  # 推断: YOLOv5 default color jitter strengths
+hsv_h: 0.015  # 论文未给出，推断: YOLOv5 默认颜色抖动强度
 hsv_s: 0.7
 hsv_v: 0.4
-hsv_ir: none  # 推断: color jitter on RGB only; none | independent (CFT: own gains for IR) | same (IR reuses RGB gains)
-degrees: 0.0
-translate: 0.1  # 推断: "random crop" realized as YOLOv5 random translate+scale (paired RGB/IR)
-scale: 0.5  # 推断
-shear: 0.0
-perspective: 0.0
-flipud: 0.0
-fliplr: 0.5  # 【论文】 horizontal flip
-mosaic: 0.0  # 推断: paper does not mention Mosaic -> off (CFT default is 1.0)
-mixup: 0.0
+hsv_ir: none  # 论文未给出，推断: 只抖动 RGB；none | independent（CFT：IR 自己采样）| same（IR 复用 RGB 增益）
+degrees: 0.0  # 论文未给出，推断: 论文未写旋转，关闭
+translate: 0.1  # 论文未给出，推断: "random crop" 用 YOLOv5 的 translate+scale，RGB/IR 共用一个矩阵；幅度未写
+scale: 0.5  # 论文未给出，推断: 同上
+shear: 0.0  # 论文未给出，推断: 论文未写 shear，关闭
+perspective: 0.0  # 论文未给出，推断: 论文未写 perspective，关闭
+flipud: 0.0  # 论文未给出，推断: 论文未写垂直翻转，关闭
+fliplr: 0.5  # 【论文】 horizontal flip；概率 0.5 论文未给出，推断（YOLOv5 默认）
+mosaic: 0.0  # 论文未给出，推断: 论文未写 Mosaic，关闭（CFT 默认 1.0）
+mixup: 0.0  # 论文未给出，推断: 论文未写 mixup，关闭；双流 __getitem__ 里 mixup 代码已注释，即使改大也不执行

@@ -2,7 +2,8 @@
 
 ## 项目目标
 复现 CCSFuse（Zhang et al., IEEE TGRS 2026, Art. no. 5400314，UAV RGB-IR 目标检测：CMFC + AFSF，基于 YOLOv5 双流）。
-官方代码未公开。详细方案见 D:\CCSFuse\CCSFuse_复现方案.md，过程记录（含每一步的完整数据）见 D:\CCSFuse\WORKLOG.md。
+官方代码未公开。详细方案见仓库根目录的 CCSFuse_复现方案.md，过程记录（含每一步的完整数据）见 WORKLOG.md。
+这两份文档和本节以下出现的 `D:\` 路径，都是 Windows 笔记本上的历史记录，不是实验室服务器的路径。
 论文 PDF 在仓库根目录（未纳入 git）；ccsfuse 环境中没有 PDF 库，读不了，以复现方案中标为【论文】的内容为准。
 
 ## 工作约定
@@ -11,10 +12,11 @@
 - 每完成一步先停下来，告诉用户如何验证，再继续下一步。
 - 方案中所有【推断】项（论文未给出的设置）都要做成 yaml 或命令行可配置，并在代码注释中标明"论文未给出，推断"。
 - 删除操作只删确认为空或确认无用的内容，删除前先核实；用户的原始数据只读。
-- **长时间训练一律交给用户在自己电脑（VS Code 终端）上运行**：给出完整命令、开跑前的检查项、续训命令，等用户贴回输出。我只运行短任务：单元测试、check_model、1% 子集过拟合（约 10 分钟）、test 集评估（约 20 分钟）。
+- **长时间训练不在对话里直接跑**。Windows 笔记本上由用户在 VS Code 终端跑；实验室服务器上用 tmux（见「服务器（Linux）」）。给出完整命令、开跑前的检查项、续训命令，等用户贴回输出。只运行短任务：单元测试、check_model、1% 子集过拟合（约 10 分钟）、test 集评估（约 20 分钟）。
 - 开始长时间训练前先让用户运行 `git status --short`，确认没有意外改动（见"踩过的坑"）。
 
-## 环境
+## 环境（Windows 笔记本，历史记录）
+下面的 `D:\` 路径只属于这台笔记本，服务器上不要用。
 - GPU：NVIDIA RTX 3070 Ti Laptop，8 GB，算力 8.6；驱动 616.64（支持 CUDA 13.4）。
   - 桌面程序常驻占用 1–2 GB 显存，实际可分配约 7.25 GB。
   - "CUDA 系统内存回退"已关闭，显存不足时会正常报 OOM。
@@ -27,8 +29,67 @@
 - 环境自检：在 D:\CCSFuse 下运行 `python check_env.py`，应输出 ALL CHECKS PASSED。
 - pip 缓存目录：D:\pip-cache（在 C:\Users\bzp02\AppData\Roaming\pip\pip.ini 中设置）。
 
+## 服务器（Linux）
+实验室机器，后续训练放在这里。用户 baozhipeng。没有 Slurm，长训练用 tmux。能直连 pypi.org。
+
+- 系统：Ubuntu 24.04，20 核 CPU，62 GB 内存。
+- GPU：1 张 RTX 5060 Ti 16 GB（Blackwell，sm_120）。驱动 595.99（支持到 CUDA 13.2），系统 nvcc 12.8。
+- conda：`/opt/miniforge3`。环境名 `ccsfuse`，Python 3.10。
+- 目录：
+  - 项目：`~/bzp/CCFUSE`（`/home/baozhipeng/bzp/CCFUSE`）
+  - 数据集：`~/bzp/datasets`，例如 `~/bzp/datasets/DroneVehicle/{rgb,ir}/images/{train,val,test}`、`~/bzp/datasets/LLVIP/...`
+  - 权重：项目里的 `weights/`（`yolov5m.pt`、`yolov5s.pt`）
+- data yaml 用相对仓库根目录的路径（`../datasets/...`）。命令都在仓库根目录执行，这样这些相对路径才指到 `~/bzp/datasets`。
+- 安装（仓库根目录）：`bash setup_server.sh`
+  - 用 `/opt/miniforge3` 建 Python 3.10 的 `ccsfuse` 环境。
+  - 从 `https://download.pytorch.org/whl/cu128` 安装 torch 2.7.1、torchvision 0.22.1（cp310 的 wheel 已在该索引上；cu128 上还有更新的 2.8–2.11，这里钉第一版带 sm_120 的稳定组合，少改 YOLOv5 v5.0 的代码）。2.5.1+cu124 没有 sm_120。
+  - 再装 `requirements-ccsfuse.txt`，并把 numpy 重新钉在 1.23.5（代码用了 `np.int`）。
+- 激活：`source /opt/miniforge3/etc/profile.d/conda.sh && conda activate ccsfuse`
+- 自检：`python check_env.py`，应输出 `ALL CHECKS PASSED`。显存下限是当前这张卡总显存的 70%（8 GB 卡约 5.6 GB，16 GB 卡约 11.2 GB），并检查当前算力是否在 `torch.cuda.get_arch_list()` 里。
+- `import cv2` 若报缺 `libGL.so.1`：`sudo apt-get install -y libgl1`。
+
+`train.py` 的默认 `--batch-size 4`、`--workers 2`、`--nbs 12` 仍是 8 GB 笔记本的设置。完整版显存大约 `0.35 + 0.775 × batch` GiB（allocated），batch 12 约 9.7 GiB，超过笔记本可分配的约 7.25 GB，所以默认 batch 保持 4。epoch、学习率、SGD 这些论文默认值没有改。服务器上要显式加上设备、batch 和 workers。
+
+`nbs` / `accumulate`（只看实际在用的 `train_rgb_ir`）：
+
+- `accumulate = max(round(nbs / batch_size), 1)`，有效 batch = `batch_size × accumulate`。
+- `weight_decay` 再乘 `batch_size * accumulate / nbs`。这个系数为 1 时，衰减和名义 batch 一致。
+- 笔记本：batch 4、nbs 12 → accumulate 3，有效 batch 12，weight_decay 系数 1。已有结果是这个口径。BN 每步看到的是 4 张图。
+- 服务器：`--batch-size 12 --nbs 12` → accumulate 1，有效 batch 12，weight_decay 系数 1，和论文总 batch（2 卡 × 6）以及笔记本的有效 batch 同一口径。BN 每步看到的是 12 张图。
+- 论文是 2 卡 DDP、每卡 batch 6，未写 SyncBN。两卡时每卡 BN 统计基于 batch 6；这里单卡 batch 12，BN 统计基于 12。
+- `--batch-size 16 --nbs 16` 的有效 batch 是 16，和论文总 batch 12 不是同一口径。Table I 四组都用 12 / 12。
+
+服务器推荐命令（有效 batch 12，weight_decay 系数 1）：
+
+```bash
+python train.py --cfg models/ccsfuse/<配置>.yaml --name <名字> \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
+tmux 长训练（DroneVehicle，SGD，lr 0.001）：
+
+```bash
+tmux new -s ccsfuse
+source /opt/miniforge3/etc/profile.d/conda.sh && conda activate ccsfuse
+cd ~/bzp/CCFUSE
+git status --short
+python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_zinit \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
+LLVIP（Adam，lr 0.0001，其余超参同 DroneVehicle；必须同时写 `--hyp` 和 `--adam`）：
+
+```bash
+python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip \
+    --data data/multispectral/LLVIP_ccsfuse.yaml \
+    --hyp data/hyp.ccsfuse_llvip.yaml --adam \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
+脱离会话：Ctrl-b 然后 d。回来：`tmux attach -t ccsfuse`。续训：`python train.py --resume runs/train/<名字>/weights/last.pt`（在同一套 batch / nbs 下恢复）。
+
 ## 代码库
-- 路径：D:\CCSFuse，即 CFT 官方实现。
+- 路径：仓库即 CFT 官方实现。Windows 上曾放在 `D:\CCSFuse`；服务器上是 `~/bzp/CCFUSE`。
   - 来源：https://github.com/DocF/multispectral-object-detection
   - commit：fb591c9b163177c0e950db08e213e24ddc912d41
 - 基于 YOLOv5 v5.0 时期的代码：
@@ -40,7 +101,8 @@
 - v5.0 主干结构：第 0 层 Focus，第 8 层 SPP；P3 / P4 / P5 来自第 4 / 6 / 9 层（均为 C3）；通道数 m 版 192 / 384 / 768，s 版 128 / 256 / 512。
 
 ### git
-- 工作分支 `ccsfuse`，`main` 保持 CFT 原样。`.gitignore` 忽略 `__pycache__/`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`。
+- GitHub 上只有 `main`。复现工作已经在 `main` 上，没有单独的 `ccsfuse` 分支；`main` 也不是「只留 CFT 原样」的分支。
+- 迁到实验室服务器的改动在 `server-linux`（从 `main` 拉出）。`.gitignore` 忽略 `__pycache__/`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`。
 - 未跟踪、不要提交：`.vscode/`（VS Code 设置）、论文 PDF。
 - git 没有配置作者身份，提交时用 `git -c user.name=bzp02 -c user.email=miho1983511@gmail.com commit ...`。
 
@@ -72,7 +134,7 @@
   - utils\ccsfuse.py：`load_coco_dual_stream()`，按 yaml 中的 `pretrain_map` 把 COCO 主干权重复制到两路；`--pretrain-neck` 时也复制 neck。
   - models\ccsfuse\yolov5m_dual_add.yaml（基线，Table I 第 1 行；调试用 yolov5s_dual_add.yaml）
   - models\ccsfuse\yolov5m_ccsfuse.yaml（完整版，第 4 行）、yolov5m_cmfc_add.yaml（+CMFC，第 2 行）、yolov5m_afsf.yaml（+AFSF，第 3 行）
-- 配置：data\hyp.ccsfuse_dronevehicle.yaml（论文超参，推断项已标注）；data\multispectral\ 下的 DroneVehicle.yaml、DroneVehicle_test.yaml、LLVIP_ccsfuse.yaml、DroneVehicle_1pct.yaml（及其 txt 列表）。
+- 配置：data\hyp.ccsfuse_dronevehicle.yaml（DroneVehicle 超参，推断项已标注）；data\hyp.ccsfuse_llvip.yaml（LLVIP：Adam 用的 lr0=0.0001，其余同 DroneVehicle，训练时加 `--adam`）；data\multispectral\ 下的 DroneVehicle.yaml、DroneVehicle_test.yaml、LLVIP_ccsfuse.yaml、DroneVehicle_1pct.yaml（及其 txt 列表）。
 - 工具（tools\）：prepare_dronevehicle.py、prepare_llvip.py、viz_pairs.py、check_loader.py、check_weights.py、check_model.py、make_subset.py、check_aug.py、test_cmfc.py、test_afsf.py；根目录 check_env.py、requirements-ccsfuse.txt。
 
 ## CCSFuse 模块的实现要点（推断项都在 yaml 中配置）
@@ -94,7 +156,7 @@
   - 显存与 batch 的关系（完整版，AMP）：峰值 allocated 约为 0.35 + 0.775 × batch GiB；论文设置（每卡 6）约 6–7.5 GB/卡，单卡 batch 12 约 11–13.5 GB。
 
 ## CFT 加载器的约定
-- 标签路径由图片路径推出：把第一个 `\images\` 替换成 `\labels\`，扩展名改为 `.txt`。
+- 标签路径由图片路径推出：先把 `/` 和 `\` 都折成当前系统的分隔符，再把第一段 `images` 换成 `labels`，扩展名改为 `.txt`。列表用正斜杠或反斜杠都可以。
 - RGB 和 IR 各自按文件名排序，然后按位置配对；两边的文件名必须完全一致。
 - **训练 loss 只用 RGB 一侧的标签（labels_rgb）。**
 - 每个样本是 6 通道张量（RGB + IR）。
@@ -103,6 +165,8 @@
 - 增强（第 2 步后）：不开 Mosaic；成对的随机平移和缩放（translate 0.1，scale 0.5）和水平翻转，两路几何变换完全一致；HSV 只作用于 RGB（`hsv_ir: none`）。
 
 ## 数据
+
+Windows 上转换后的数据在 `D:\CCSFuse\datasets\`。服务器上同一份内容放在 `~/bzp/datasets/`（不要带 `D:\`）。原始数据仍只读；训练读的是转换后的 YOLO 目录。
 
 ### 原始数据（只读）
 - D:\CCSFuse\datasets\DroneVehicle_raw\{train,val,test}\{split}{img,imgr,label,labelr}
@@ -156,26 +220,56 @@
 - LLVIP（val 键指向 test）：data\multispectral\LLVIP_ccsfuse.yaml
 - 过拟合检查（train 1% 子集，180 对，train 和 val 都指向它）：data\multispectral\DroneVehicle_1pct.yaml
 
-## 常用命令（都在 D:\CCSFuse 下运行，python 指 D:\Miniconda\envs\ccsfuse\python.exe）
-- 训练（默认即基线和本机配置：yolov5m_dual_add.yaml、weights/yolov5m.pt、DroneVehicle.yaml、hyp.ccsfuse_dronevehicle.yaml、45 epoch、batch 4、nbs 12、workers 2，AMP 自动开启）：
+## 常用命令
+Windows 笔记本：在 `D:\CCSFuse` 下运行，python 指 `D:\Miniconda\envs\ccsfuse\python.exe`，用默认 batch 4 / workers 2 / nbs 12。
+服务器：在 `~/bzp/CCFUSE` 下运行，先 `conda activate ccsfuse`，训练命令加上 `--batch-size 12 --workers 8 --device 0 --nbs 12`（见「服务器（Linux）」）。
+- 训练（默认即基线和笔记本配置：yolov5m_dual_add.yaml、weights/yolov5m.pt、DroneVehicle.yaml、hyp.ccsfuse_dronevehicle.yaml、45 epoch、batch 4、nbs 12、workers 2，AMP 自动开启）：
   `python train.py --cfg models/ccsfuse/<配置>.yaml --name <名字>`
-- 续训：`python train.py --resume runs\train\<名字>\weights\last.pt`（已测试：epoch、hyp-set、优化器、EMA 都能恢复）
+- 续训：`python train.py --resume runs/train/<名字>/weights/last.pt`（已测试：epoch、hyp-set、优化器、EMA 都能恢复）
 - test 集评估（约 16–21 分钟）：
   `python test.py --weights runs/train/<名字>/weights/best.pt --data data/multispectral/DroneVehicle_test.yaml --batch-size 8 --iou-thres 0.6 --task test --verbose --name <名字>_test`
   - **必须显式写 `--iou-thres 0.6`**（test.py 命令行默认 0.5，与训练时的验证口径不一致）。
 - 1% 子集过拟合检查（约 10 分钟）：
   `python train.py --cfg <配置> --data data/multispectral/DroneVehicle_1pct.yaml --epochs 30 --hyp-set lr0=0.01 warmup_epochs=1 warmup_min_iters=45 --name overfit_<名字>`
-- 检查工具：
-  - `python tools\check_model.py --cfg <配置> [--batch-size N]`：权重迁移（应为 rgb 306/306、ir 306/306）、融合层和 Detect 的形状、loss、显存、参数量、GFLOPs（thop 和 flop_counter 两种）、CMFC 分支权重。
-  - `python tools\test_cmfc.py`、`python tools\test_afsf.py`：单元测试，应输出 ALL ... TESTS PASSED。
-  - `python tools\check_aug.py --n 10 --out runs/viz/aug_pairs.jpg`：增强可视化和三项数值检查。
-  - `python tools\check_loader.py --data <yaml>`、`python tools\viz_pairs.py --root <数据目录> --split train --n 10 --out <文件.jpg>`、`python tools\check_weights.py`、`python tools\make_subset.py --frac 0.01 --out data\multispectral\<名字>.yaml`。
+  - 服务器上同一条命令再加 `--batch-size 12 --workers 8 --device 0 --nbs 12`，放进 tmux。
+- 检查工具（正斜杠在 Windows 和 Linux 上都能用）：
+  - `python tools/check_model.py --cfg <配置> [--batch-size N]`：权重迁移（应为 rgb 306/306、ir 306/306）、融合层和 Detect 的形状、loss、显存、参数量、GFLOPs（thop 和 flop_counter 两种）、CMFC 分支权重。
+  - `python tools/test_cmfc.py`、`python tools/test_afsf.py`：单元测试，应输出 ALL ... TESTS PASSED。
+  - `python tools/check_aug.py --n 10 --out runs/viz/aug_pairs.jpg`：增强可视化和三项数值检查。
+  - `python tools/check_loader.py --data <yaml>`、`python tools/viz_pairs.py --root <数据目录> --split train --n 10 --out <文件.jpg>`、`python tools/check_weights.py`、`python tools/make_subset.py --frac 0.01 --out data/multispectral/<名字>.yaml`。
 
 ## 超参数（data\hyp.ccsfuse_dronevehicle.yaml，可用 `--hyp-set` 覆盖）
 - 论文给出：SGD、lr0 0.001、momentum 0.9、45 epoch、batch 12（2 卡 × 6）。
 - 推断：lrf 0.01（YOLOv5 余弦退火，视作 One-Cycle）、nesterov False、weight_decay 5e-4、warmup 3 epoch 且最少 1000 步、warmup_bias_lr 0.01、mosaic 0、translate 0.1、scale 0.5、fliplr 0.5、HSV 用 YOLOv5 默认值、hsv_ir none。
 - 本机：batch 4 + 梯度累积 3 步（nbs 12），weight_decay 缩放系数为 1。
+- 服务器：`--batch-size 12 --nbs 12`，accumulate 1，系数 1。
 - neck 和 head 不加载 COCO 权重（论文只说主干用 COCO 预训练），可用 `--pretrain-neck` 打开。
+- LLVIP：`data/hyp.ccsfuse_llvip.yaml`，`lr0: 0.0001`，训练加 `--adam`（beta1 = momentum 0.9，beta2 0.999 为推断）。其余键与 DroneVehicle 相同。
+
+## 论文训练设置对照
+
+论文原文：Ubuntu 20.04、Python 3.8、PyTorch 2.0.1、两张 RTX 4090D；输入缩到 640×640；主干用 COCO 预训练；45 epoch；每卡 batch 6；DroneVehicle 用 SGD、momentum 0.9、初始学习率 0.001、One-Cycle；增强为水平翻转、随机裁剪、颜色变换。LLVIP 相同，优化器改为 Adam、学习率 0.0001。
+
+| 项 | 论文 | 代码当前值 | 对照 |
+|---|---|---|---|
+| 系统 / Python / PyTorch | Ubuntu 20.04，Python 3.8，PyTorch 2.0.1 | 服务器 Ubuntu 24.04，Python 3.10，torch 2.7.1+cu128。笔记本 Python 3.10.22，torch 2.5.1+cu124 | 环境差异，不改。5060 Ti（sm_120）要 cu128 的 torch，2.0.1 没有这个算力 |
+| GPU 与总 batch | 2×4090D，每卡 6，总 batch 12 | 服务器 `--batch-size 12 --nbs 12`（accumulate=1，有效 batch 12，weight_decay 系数 1）。`train.py` 默认 `--batch-size 4 --nbs 12`（accumulate 3，有效 batch 12） | 总 batch 与论文一致。默认 batch 保持 4：完整版 batch 12 约 9.7 GiB allocated，笔记本约 7.25 GB 可用，会 OOM |
+| BN | 两卡 DDP，未写 SyncBN | 单卡 batch 12 | 论文两卡时每卡 BN 基于 batch 6；单卡 batch 12 的 BN 基于 12。笔记本已有结果的 BN 基于 batch 4 |
+| 输入 | 640×640 | `--img-size 640 640`。letterbox：长边缩到 640，短边填充（DroneVehicle 裁边后 640×512，上下各填约 64 px） | 张量是 640×640，一致。填充而不是拉伸：论文未给出，推断 |
+| 主干初始化 | COCO 预训练 | `weights/yolov5m.pt`，`load_coco_dual_stream` 复制到两路主干。neck 默认不复制 | 主干一致。neck 不加载：论文未给出，推断（`--pretrain-neck`） |
+| Epoch | 45 | `--epochs 45` | 一致 |
+| DroneVehicle 优化器 | SGD，momentum 0.9 | SGD，`momentum: 0.9`，`nesterov: False` | momentum 一致。nesterov：论文未给出，推断为 False |
+| 初始学习率 | 0.001 | `lr0: 0.001` | 一致 |
+| 学习率调度 | One-Cycle | 默认 `one_cycle(1, lrf, epochs)`：余弦乘子从 1 到 `lrf=0.01`，再乘 lr0，用 LambdaLR。`--linear-lr` 默认关闭。另有线性 warmup | 默认是 YOLOv5 的余弦 one-cycle，线性开关是关的。`lrf` 和 warmup 长度：论文未给出，推断。调度类是 LambdaLR，未使用会先升后降的 `torch.optim.lr_scheduler.OneCycleLR` |
+| Warmup | 未单独写 | `warmup_epochs: 3`，`warmup_min_iters: 1000`，`warmup_momentum: 0.8`，`warmup_bias_lr: 0.01`。SGD momentum 在这段从 0.8 插到 0.9 | 论文未给出，推断 |
+| weight_decay | 未写 | `0.0005`，再乘 `batch*accumulate/nbs`。服务器上系数为 1 | 论文未给出，推断 |
+| 水平翻转 | 有 | `fliplr: 0.5`，两路同一次随机 | 有翻转，一致。概率 0.5：论文未给出，推断 |
+| 随机裁剪 | 有 | `translate: 0.1`、`scale: 0.5`，`random_perspective_rgb_ir` 两路共用一个矩阵（Mosaic 关闭时） | 用平移+缩放实现。幅度：论文未给出，推断 |
+| 颜色变换 | 有 | `hsv_h/s/v = 0.015/0.7/0.4`，`hsv_ir: none`（只动 RGB） | 有颜色变换，一致。强度和「只动 RGB」：论文未给出，推断 |
+| Mosaic、mixup、shear、perspective、flipud、旋转 | 未写 | hyp 里全是 0。双流 `__getitem__` 的 mixup 代码已注释，把 `mixup` 调大也不会执行 | 已关闭 |
+| 损失系数 | 未写（沿用 YOLOv5 损失） | box 0.05、cls 0.5、obj 1.0、iou_t 0.20、anchor_t 4.0 等 | 论文未给出，推断 |
+| AMP、workers | 未写 | CUDA 上 AMP 默认开。workers 默认 2；服务器命令写 8 | 论文未给出，推断 |
+| LLVIP | Adam，lr 0.0001，其余相同 | `data/hyp.ccsfuse_llvip.yaml` 的 `lr0: 0.0001`，其余键与 DroneVehicle 相同。命令加 `--adam`。`betas=(momentum, 0.999)`，beta1=0.9。warmup 不改 Adam 的 beta | 优化器和 lr 一致。beta2=0.999、eps、Adam 的 weight_decay：论文未给出，推断 |
 
 ## 实验结果（DroneVehicle test 集，mAP50 %）
 
@@ -202,7 +296,7 @@
     - 训练结束后由我在 test 集上评估，并读出最终的 λ。
   - 之后：若零初始化有效，再跑 +CMFC（`yolov5m_cmfc_add.yaml`，已是 proj_init zero）和 +AFSF（`yolov5m_afsf.yaml`，不含 CMFC，随时可以跑）；若仍不提升，试方案 2（ris_norm），并结合 +AFSF 的结果定位是哪个模块的问题。
 - 之后的步骤（方案第 7 节）：第 8 步 Table II 权重策略消融（`branch_weights`）；第 9 步 LLVIP（Adam，lr 1e-4）；第 10 步记录 λ 的变化曲线。
-- 服务器迁移：用户暂不考虑。若迁移后设置不变（batch 4、nbs 12、单卡），已有结果可以直接用；若改成论文的 batch 12 或多卡，四组都要重训。Linux 上要改 data yaml 中的 `D:/` 路径和 1% 子集 txt 中的反斜杠。
+- 服务器迁移：在 `server-linux` 分支。data yaml 和 1% 列表已改成相对路径；`torch.load` 显式 `weights_only=False`；安装脚本钉 torch 2.7.1+cu128。笔记本上已有的结果对应 batch 4、nbs 12（有效 batch 12，BN 看到的是 4）。服务器训练用 `--batch-size 12 --nbs 12`（单卡，accumulate 1，有效 batch 12，与论文 2×6 的总 batch 相同；BN 看到的是 12）。Table I 四组都按这个口径。
 - 用户待办：手动删除 D:\CCSFuse_wheels（约 2.4 GB）。
 
 ## 踩过的坑（结论）
@@ -218,13 +312,13 @@
 - test.py 默认会把每张图的预测写成 txt（`--save-txt` 默认 True，命令行关不掉），这是 test 集评估较慢的原因之一。
 - lr0=0.001（论文值）时，1% 子集 30 epoch 的 mAP50 只到 0.12。原因是优化步数少（约 450 步），不是 bug；过拟合检查用 lr0=0.01。
 - 1% 子集这样的小数据，YOLOv5 的 warmup 默认至少 1000 步，会占满整个训练。用 `--hyp-set warmup_epochs=1 warmup_min_iters=45` 缩短。
-- 加载器读 txt 图片列表时，标签按路径中的 `\images\` 替换得到，所以列表必须写 Windows 反斜杠路径（make_subset.py 已处理）。cache 生成在 txt 旁边，不会覆盖完整训练集的 cache。
+- 加载器读 txt 图片列表时，会先把 `/` 和 `\` 折成 `os.sep`，再把第一段 `images` 换成 `labels`。列表不必再写 Windows 反斜杠。`tools/make_subset.py` 写出 POSIX 绝对路径。cache 生成在 txt 旁边，不会覆盖完整训练集的 cache。
 - VS Code 曾提示创建 D:\CCSFuse\.venv（uv 的 Python 3.15，没有 torch），用户同意后已删除。之后用户在 VS Code 中点"运行"时用错过这个 3.15 解释器（报 `No module named 'thop'`）。应拒绝 VS Code 创建虚拟环境的提示，把解释器选为 D:\Miniconda\envs\ccsfuse\python.exe，或直接写 python.exe 的完整路径。
-- 在终端运行 tools\*.py 前要先 `cd D:\CCSFuse`，因为脚本的默认路径是相对路径。
+- 在终端运行 `tools/*.py` 前要先进入仓库根目录（Windows 上是 `D:\CCSFuse`，服务器上是 `~/bzp/CCFUSE`），因为脚本的默认路径是相对路径。
 - download.pytorch.org、阿里云、上海交大的镜像下载很慢且会断线。torch wheel 用南京大学镜像 https://mirrors.nju.edu.cn/pytorch/whl/cu124/ 下载，并用官方 SHA256 校验（已写在 requirements-ccsfuse.txt 中）。PyPI 用清华镜像。
 - numpy 必须 <1.24：代码中用到了 `np.int`。
 - 安装依赖要用 requirements-ccsfuse.txt 中写死的版本，加 `--only-binary :all:`。不写死版本时 pip 会长时间回溯。
-- torch 不要升级到 ≥2.6：v5.0 的权重是整个模块的 pickle，需要 `torch.load(..., weights_only=False)`，而 2.6 起默认值改为 True，加载会失败。
+- torch ≥2.6 的 `torch.load` 默认 `weights_only=True`，打不开 v5.0 的整模块 pickle。仓库里每处 `torch.load` 都写了 `weights_only=False`（2.5 也接受这个参数）。服务器因此使用 torch 2.7.1+cu128。不要改回默认，也不要再升到未核对过的版本。
 - CFT 的 `attempt_download` 在本地没有权重文件时，会下载 GitHub 最新版权重，与这份代码不兼容。`train_rgb_ir` 已改为找不到本地文件就报错。
 - CFT 原来的 hyp.scratch.yaml 中 mosaic=1.0；CCSFuse 用的 hyp.ccsfuse_dronevehicle.yaml 中 mosaic=0。
 - utils\datasets.py 第 897 行的 `assert (a, b), ...` 恒为真，空数据集不会报错（会打印 SyntaxWarning，不影响运行）。加载时 IR 那一行打印的是 rgb 的 cache 路径（第 937 行的打印错误），实际加载用的是 IR 的 cache。

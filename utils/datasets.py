@@ -515,10 +515,20 @@ class LoadStreams:  # multiple IP or RTSP cameras
         return 0  # 1E12 frames = 32 streams at 30 FPS for 30 years
 
 
+def norm_path_sep(path):
+    # Image lists may use '/' or '\'. Matching os.sep + 'images' + os.sep only
+    # works after both are folded onto this platform's separator.
+    return path.replace('\\', os.sep).replace('/', os.sep)
+
+
 def img2label_paths(img_paths):
     # Define label paths as a function of image paths
     sa, sb = os.sep + 'images' + os.sep, os.sep + 'labels' + os.sep  # /images/, /labels/ substrings
-    return ['txt'.join(x.replace(sa, sb, 1).rsplit(x.split('.')[-1], 1)) for x in img_paths]
+    out = []
+    for x in img_paths:
+        x = norm_path_sep(x)
+        out.append('txt'.join(x.replace(sa, sb, 1).rsplit(x.split('.')[-1], 1)))
+    return out
 
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
@@ -549,7 +559,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                         # f += [p.parent / x.lstrip(os.sep) for x in t]  # local to global path (pathlib)
                 else:
                     raise Exception(f'{prefix}{p} does not exist')
-            self.img_files = sorted([x.replace('/', os.sep) for x in f if x.split('.')[-1].lower() in img_formats])
+            self.img_files = sorted([norm_path_sep(x) for x in f if x.split('.')[-1].lower() in img_formats])
             # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in img_formats])  # pathlib
             assert self.img_files, f'{prefix}No images found'
         except Exception as e:
@@ -560,7 +570,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # print(self.label_files)
         cache_path = (p if p.is_file() else Path(self.label_files[0]).parent).with_suffix('.cache')  # cached labels
         if cache_path.is_file():
-            cache, exists = torch.load(cache_path), True  # load
+            cache, exists = torch.load(cache_path, weights_only=False), True  # load; v5 caches are pickled dicts
             if cache['hash'] != get_hash(self.label_files + self.img_files) or 'version' not in cache:  # changed
                 cache, exists = self.cache_labels(cache_path, prefix), False  # re-cache
         else:
@@ -890,8 +900,8 @@ class LoadMultiModalImagesAndLabels(Dataset):  # for training/testing
                     else:
                         raise Exception(f'{prefix}{p_ir} does not exist')
 
-            self.img_files_rgb = sorted([x.replace('/', os.sep) for x in f_rgb if x.split('.')[-1].lower() in img_formats])
-            self.img_files_ir = sorted([x.replace('/', os.sep) for x in f_ir if x.split('.')[-1].lower() in img_formats])
+            self.img_files_rgb = sorted([norm_path_sep(x) for x in f_rgb if x.split('.')[-1].lower() in img_formats])
+            self.img_files_ir = sorted([norm_path_sep(x) for x in f_ir if x.split('.')[-1].lower() in img_formats])
 
             # self.img_files = sorted([x for x in f if x.suffix[1:].lower() in img_formats])  # pathlib
             assert (self.img_files_rgb, self.img_files_ir), (f'{prefix}No images found', f'{prefix}No images found')
@@ -905,7 +915,7 @@ class LoadMultiModalImagesAndLabels(Dataset):  # for training/testing
         # print(self.label_files)
         cache_rgb_path = (p_rgb if p_rgb.is_file() else Path(self.label_files_rgb[0]).parent).with_suffix('.cache')  # cached labels
         if cache_rgb_path.is_file():
-            cache_rgb, exists_rgb = torch.load(cache_rgb_path), True  # load
+            cache_rgb, exists_rgb = torch.load(cache_rgb_path, weights_only=False), True  # load; v5 caches are pickled dicts
             if cache_rgb['hash'] != get_hash(self.label_files_rgb + self.img_files_rgb) or 'version' not in cache_rgb:  # changed
                 cache_rgb, exists_rgb = self.cache_labels(self.img_files_rgb,self.label_files_rgb,
                                                           cache_rgb_path, prefix), False  # re-cache
@@ -918,7 +928,7 @@ class LoadMultiModalImagesAndLabels(Dataset):  # for training/testing
         # print(self.label_files)
         cache_ir_path = (p_ir if p_ir.is_file() else Path(self.label_files_ir[0]).parent).with_suffix('.cache')  # cached labels
         if cache_ir_path.is_file():
-            cache_ir, exists_ir = torch.load(cache_ir_path), True  # load
+            cache_ir, exists_ir = torch.load(cache_ir_path, weights_only=False), True  # load; v5 caches are pickled dicts
             if cache_ir['hash'] != get_hash(self.label_files_ir + self.img_files_ir) or 'version' not in cache_ir:  # changed
                 cache_ir, exists_ir = self.cache_labels(self.img_files_ir, self.label_files_ir,
                                                         cache_ir_path, prefix), False  # re-cache

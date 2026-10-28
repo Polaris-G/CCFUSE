@@ -73,7 +73,7 @@ def train(hyp, opt, device, tb_writer=None):
     loggers = {'wandb': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
-        run_id = torch.load(weights).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
+        run_id = torch.load(weights, weights_only=False).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, save_dir.stem, run_id, data_dict)
         loggers['wandb'] = wandb_logger.wandb
         data_dict = wandb_logger.data_dict
@@ -89,7 +89,7 @@ def train(hyp, opt, device, tb_writer=None):
     if pretrained:
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch.load(weights, map_location=device, weights_only=False)  # v5.0 checkpoint is a pickled module
         model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
         state_dict = ckpt['model'].float().state_dict()  # to FP32
@@ -500,7 +500,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     loggers = {'wandb': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
-        run_id = torch.load(weights).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
+        run_id = torch.load(weights, weights_only=False).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, save_dir.stem, run_id, data_dict)
         loggers['wandb'] = wandb_logger.wandb
         data_dict = wandb_logger.data_dict
@@ -516,7 +516,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     if pretrained:
         # CCSFuse: never let attempt_download fetch the latest (v5.0-incompatible) release weights
         assert os.path.isfile(weights), f'weights {weights} not found locally (expected v5.0 COCO weights)'
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch.load(weights, map_location=device, weights_only=False)  # v5.0 checkpoint is a pickled module
         model = Model(opt.cfg or ckpt['model'].yaml, ch=6, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
         if len(ckpt['model'].model) != len(model.model):
@@ -568,17 +568,24 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
         logger.info(f'Optimizer: {len(extra)} extra parameter tensors (e.g. CMFC lambdas) added to the no-decay group')
 
     if opt.adam:
-        optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
+        # beta1 = hyp momentum（论文 LLVIP 的 Adam 与 DroneVehicle 的 momentum 0.9 对齐）.
+        # beta2 论文未给出，推断: PyTorch 默认 0.999。新参数组经 add_param_group 继承同一 betas。
+        # warmup 只改 lr；Adam 的 beta 没有 'momentum' 键，不会被 warmup 插值（YOLOv5 原行为）。
+        optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))
+        logger.info('Optimizer: Adam lr0=%g beta1=%g beta2=0.999 (beta2 论文未给出，推断)' % (hyp['lr0'], hyp['momentum']))
     else:
         optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=hyp.get('nesterov', True))
+        logger.info('Optimizer: SGD lr0=%g momentum=%g nesterov=%s' % (hyp['lr0'], hyp['momentum'], hyp.get('nesterov', True)))
 
     optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
     logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
     del pg0, pg1, pg2
 
-    # Scheduler https://arxiv.org/pdf/1812.01187.pdf
-    # https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#OneCycleLR
+    # Scheduler. 【论文】 One-Cycle.
+    # 默认是 YOLOv5 的余弦：utils.general.one_cycle(1 -> lrf)，再乘 lr0，包在 LambdaLR 里。
+    # --linear-lr 默认关闭。lrf 和前面的 warmup 论文未给出，推断。
+    # 没有用 torch.optim.lr_scheduler.OneCycleLR（该类是先升后降，并反向调 momentum）。
     if opt.linear_lr:
         lf = lambda x: (1 - x / (epochs - 1)) * (1.0 - hyp['lrf']) + hyp['lrf']  # linear
     else:
@@ -936,7 +943,10 @@ if __name__ == '__main__':
     parser.add_argument('--hyp-set', nargs='*', default=[], metavar='KEY=VALUE', help='override hyp entries, e.g. lr0=0.01 mosaic=0')
     parser.add_argument('--epochs', type=int, default=45)  # 【论文】 45 epochs
     parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
-    # 推断 (论文未给出): paper uses batch 12 on 2 GPUs; 8GB laptop -> batch 4 + accumulate to nominal 12
+    # 论文总 batch 是 12（2 卡 × 6）。默认仍是 4：完整版 allocated ≈ 0.35+0.775×batch GiB，
+    # batch 12 ≈ 9.7 GiB，笔记本 8 GB 卡可分配约 7.25 GB，会 OOM。笔记本用 batch 4 + nbs 12
+    # （accumulate 3，有效 batch 12）。服务器单卡显式传 --batch-size 12 --workers 8 --device 0 --nbs 12
+    # （accumulate 1，有效 batch 12，weight_decay 系数 1）。见 CLAUDE.md。
     parser.add_argument('--nbs', type=int, default=12, help='nominal batch size for gradient accumulation (YOLOv5: 64)')
     # 推断 (论文未给出): paper only says the backbone is COCO-pretrained; neck transfer is optional
     parser.add_argument('--pretrain-neck', action='store_true', help='also copy COCO neck weights into the fused neck')
@@ -953,16 +963,16 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--multi-scale', action='store_true', help='vary img-size +/- 50%%')
     parser.add_argument('--single-cls', action='store_true', help='train multi-class data as single-class')
-    parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
+    parser.add_argument('--adam', action='store_true', help='Adam for LLVIP; beta1=hyp momentum (0.9), beta2=0.999 (论文未给出，推断)')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-    parser.add_argument('--workers', type=int, default=2, help='maximum number of dataloader workers (Windows: 2-4)')
+    parser.add_argument('--workers', type=int, default=2, help='maximum number of dataloader workers (laptop default 2; lab server: 8)')
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--quad', action='store_true', help='quad dataloader')
-    parser.add_argument('--linear-lr', action='store_true', help='linear LR')
+    parser.add_argument('--linear-lr', action='store_true', help='linear LR instead of the default YOLOv5 cosine one-cycle')
     parser.add_argument('--label-smoothing', type=float, default=0.0, help='Label smoothing epsilon')
     parser.add_argument('--upload_dataset', action='store_true', help='Upload dataset as W&B artifact table')
     parser.add_argument('--bbox_interval', type=int, default=-1, help='Set bounding-box image logging interval for W&B')

@@ -152,4 +152,24 @@ Miss Rate - FPPI curve
 
 https://github.com/ultralytics/yolov5
 
+## CCSFuse（实验室服务器）
+
+`train.py` 默认仍是笔记本的 `--batch-size 4 --nbs 12`（8 GB 跑不了 batch 12）。服务器单卡用论文的总 batch 12，`--nbs 12` 使 accumulate=1。细节和对照表见 `CLAUDE.md`。
+
+DroneVehicle：
+
+```bash
+python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_zinit \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
+LLVIP（Adam，lr 0.0001，其余超参同 DroneVehicle）：
+
+```bash
+python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip \
+    --data data/multispectral/LLVIP_ccsfuse.yaml \
+    --hyp data/hyp.ccsfuse_llvip.yaml --adam \
+    --batch-size 12 --workers 8 --device 0 --nbs 12
+```
+
   

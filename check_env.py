@@ -1,7 +1,10 @@
-"""Environment check for CCSFuse reproduction (RTX 3070 Ti Laptop 8GB).
+"""Environment check for the CCSFuse conda env.
 
-Usage:
-    conda activate ccsfuse
+Pass/fail does not assume a vendor, an OS, or a particular GPU. The VRAM floor is a
+fraction of the card that is actually visible, and the GPU's compute capability must
+appear in torch.cuda.get_arch_list() (cu124 wheels do not list sm_120).
+
+Usage (from the repo root, after `conda activate ccsfuse`):
     python check_env.py
 """
 import platform
@@ -47,38 +50,67 @@ print(f"torchvision : {torchvision.__version__}")
 # 2. CUDA ---------------------------------------------------------------------
 section("CUDA")
 if not torch.cuda.is_available():
-    fail("torch.cuda.is_available() is False (CPU-only torch or driver problem)")
+    built = []
+    try:
+        built = list(torch.cuda.get_arch_list())
+    except Exception:
+        pass
+    fail(f"torch.cuda.is_available() is False (CPU-only torch or driver problem). arch list: {built}")
     sys.exit(1)
 dev = torch.device("cuda:0")
 props = torch.cuda.get_device_properties(dev)
-print(f"GPU         : {props.name}, compute capability {props.major}.{props.minor}, {props.multi_processor_count} SMs")
+arch = f"sm_{props.major}{props.minor}"
+built = list(torch.cuda.get_arch_list())
+print(f"GPU         : {props.name}, compute capability {props.major}.{props.minor} ({arch}), {props.multi_processor_count} SMs")
 print(f"cuDNN       : {torch.backends.cudnn.version()} (enabled={torch.backends.cudnn.enabled})")
 print(f"bf16 support: {torch.cuda.is_bf16_supported()}")
+print(f"arch list   : {', '.join(built) if built else '(empty)'}")
+
+
+def _arch_built(token, archs):
+    # sm_120 matches sm_120 and sm_120a. A shorter token such as sm_10 must not match sm_100.
+    for item in archs:
+        name = item.replace("compute_", "sm_")
+        if name == token:
+            return True
+        if name.startswith(token) and (len(name) == len(token) or not name[len(token)].isdigit()):
+            return True
+    return False
+
+
+if not _arch_built(arch, built):
+    fail(f"{arch} is not in torch.cuda.get_arch_list()={built}; this wheel has no kernels for the current GPU")
 
 # 3. memory -------------------------------------------------------------------
 section("GPU memory")
 free, total = torch.cuda.mem_get_info(dev)
-print(f"Driver view : free {free / 2**30:.2f} GB / total {total / 2**30:.2f} GB "
+total_gb = total / 2**30
+free_gb = free / 2**30
+print(f"Driver view : free {free_gb:.2f} GB / total {total_gb:.2f} GB "
       f"(used by other processes: {(total - free) / 2**30:.2f} GB)")
 
-# Actually allocate in 256 MB chunks to see how much PyTorch can really get.
+# Allocate in 256 MB chunks to see how much PyTorch can really get.
+# Floor scales with this GPU: 70% of an 8 GB card is 5.6 GB, of a 16 GB card is 11.2 GB.
+min_frac = 0.70
 chunks, chunk_bytes = [], 256 * 2**20
 try:
     while True:
         chunks.append(torch.empty(chunk_bytes, dtype=torch.uint8, device=dev))
 except torch.cuda.OutOfMemoryError:
     pass
+except RuntimeError as exc:
+    if "out of memory" not in str(exc).lower():
+        raise
 allocatable = len(chunks) * chunk_bytes
-print(f"Allocatable : {allocatable / 2**30:.2f} GB (256 MB chunks until OOM)")
-if allocatable > total:
-    # Windows driver spills CUDA allocations into system RAM instead of raising OOM:
-    # training would silently slow down by 10x+ rather than fail.
-    print("[WARN] More memory than physical VRAM was allocatable -> 'CUDA Sysmem Fallback' is ON.\n"
-          "       NVIDIA Control Panel > Manage 3D settings > Program Settings > add "
-          f"{sys.executable}\n"
-          "       > 'CUDA - Sysmem Fallback Policy' = 'Prefer No Sysmem Fallback'")
+alloc_gb = allocatable / 2**30
+print(f"Allocatable : {alloc_gb:.2f} GB (256 MB chunks until OOM); floor {min_frac:.0%} of {total_gb:.2f} GB = {min_frac * total_gb:.2f} GB")
 del chunks
 torch.cuda.empty_cache()
+if alloc_gb > total_gb * 1.02:
+    fail(f"allocatable {alloc_gb:.2f} GB exceeds physical VRAM {total_gb:.2f} GB; "
+         "allocations are spilling into system RAM instead of raising OOM")
+elif alloc_gb < min_frac * total_gb:
+    fail(f"allocatable {alloc_gb:.2f} GB is below {min_frac:.0%} of this GPU's {total_gb:.2f} GB")
 
 # 4. AMP training step ----------------------------------------------------------
 section("AMP (fp16 autocast + GradScaler)")

@@ -32,9 +32,10 @@ out = Path(a.out)
 tag = f"{out.stem}_{a.split}"
 lists = {}
 for mod, root in (("rgb", rgb_dir), ("ir", ir_dir)):
-    # the loader finds labels by replacing \images\ with \labels\, so write native absolute paths
+    # img2label_paths replaces the first images segment with labels. The loader
+    # accepts both separators, so write POSIX absolute paths (no drive letters).
     f = out.parent / f"{tag}_{mod}.txt"
-    f.write_text("\n".join(str((root / s).resolve()) for s in pick) + "\n", encoding="utf-8")
+    f.write_text("\n".join((root / s).resolve().as_posix() for s in pick) + "\n", encoding="utf-8")
     lists[mod] = f.resolve().as_posix()
 
 cfg = {

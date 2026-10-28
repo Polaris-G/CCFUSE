@@ -1,13 +1,23 @@
-# Pinned environment for CCSFuse reproduction (Windows, Python 3.10, RTX 3070 Ti 8GB).
-# torch/torchvision are installed separately from local cu124 wheels (see README / setup notes):
-#   torch==2.5.1+cu124  torchvision==0.20.1+cu124
-# Fast source (download.pytorch.org is slow/unstable here): https://mirrors.nju.edu.cn/pytorch/whl/cu124/
-# Official SHA256 (from download.pytorch.org/whl/cu124/<pkg>/):
+# Pinned CCSFuse dependencies (Python 3.10). torch and torchvision are NOT in this file.
+#
+# Windows laptop (historical): RTX 3070 Ti 8GB, torch==2.5.1+cu124, torchvision==0.20.1+cu124.
+#   download.pytorch.org was slow there; wheels came from
+#   https://mirrors.nju.edu.cn/pytorch/whl/cu124/ and were checked against the official SHA256:
 #   6f99d8459369cfd6661c2aee14787592fe50156a33faf9ef643ba04e42d6543f  torch-2.5.1+cu124-cp310-cp310-win_amd64.whl
 #   b18c35fad1199d027f1b4a7a7027bbf8ab5e8d1dc6feb72431c2efaa58551c64  torchvision-0.20.1+cu124-cp310-cp310-win_amd64.whl
-# Install:
 #   python -m pip install <torch.whl> <torchvision.whl> -r requirements-ccsfuse.txt --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple
-# numpy must stay < 1.24: the CFT/YOLOv5-v5.0 codebase uses np.int.
+#
+# Lab Linux server (Ubuntu 24.04, RTX 5060 Ti, sm_120): use setup_server.sh.
+#   cu124 builds have no sm_120 kernels. The script installs torch==2.7.1 and
+#   torchvision==0.22.1 from https://download.pytorch.org/whl/cu128 (both are on that
+#   index for cp310; newer cu128 builds also exist, this pair is the first stable one
+#   with sm_120). It can reach pypi.org directly, then installs this file.
+#   torch>=2.6 defaults torch.load(weights_only=True). Every torch.load in this repo
+#   passes weights_only=False so v5.0 pickled checkpoints still open on 2.5 and 2.7.
+#
+# numpy must stay 1.23.5: the CFT/YOLOv5-v5.0 code uses np.int, removed in numpy 1.24.
+# torch 2.7 still imports against NumPy 1.x. setup_server.sh re-pins numpy==1.23.5
+# after torch, in case the wheel pulls a newer numpy.
 numpy==1.23.5
 scipy==1.10.1
 opencv-python==4.8.1.78
