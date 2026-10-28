@@ -1,10 +1,11 @@
 # DroneVehicle test split for final evaluation (paper reports on test).
 # CFT's test.py only reads val_rgb / val_ir, so they point at the test split here.
+# Paths are relative to the repo root (run from ~/bzp/CCFUSE). Datasets sit beside the repo at ~/bzp/datasets.
 
-train_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/train
-val_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/test
-train_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/train
-val_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/test
+train_rgb: ../datasets/DroneVehicle/rgb/images/train
+val_rgb: ../datasets/DroneVehicle/rgb/images/test
+train_ir: ../datasets/DroneVehicle/ir/images/train
+val_ir: ../datasets/DroneVehicle/ir/images/test
 
 # number of classes
 nc: 5

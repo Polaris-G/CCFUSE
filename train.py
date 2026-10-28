@@ -73,7 +73,7 @@ def train(hyp, opt, device, tb_writer=None):
     loggers = {'wandb': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
-        run_id = torch.load(weights).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
+        run_id = torch.load(weights, weights_only=False).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, save_dir.stem, run_id, data_dict)
         loggers['wandb'] = wandb_logger.wandb
         data_dict = wandb_logger.data_dict
@@ -89,7 +89,7 @@ def train(hyp, opt, device, tb_writer=None):
     if pretrained:
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch.load(weights, map_location=device, weights_only=False)  # v5.0 checkpoint is a pickled module
         model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
         state_dict = ckpt['model'].float().state_dict()  # to FP32
@@ -500,7 +500,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     loggers = {'wandb': None}  # loggers dict
     if rank in [-1, 0]:
         opt.hyp = hyp  # add hyperparameters
-        run_id = torch.load(weights).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
+        run_id = torch.load(weights, weights_only=False).get('wandb_id') if weights.endswith('.pt') and os.path.isfile(weights) else None
         wandb_logger = WandbLogger(opt, save_dir.stem, run_id, data_dict)
         loggers['wandb'] = wandb_logger.wandb
         data_dict = wandb_logger.data_dict
@@ -516,7 +516,7 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
     if pretrained:
         # CCSFuse: never let attempt_download fetch the latest (v5.0-incompatible) release weights
         assert os.path.isfile(weights), f'weights {weights} not found locally (expected v5.0 COCO weights)'
-        ckpt = torch.load(weights, map_location=device)  # load checkpoint
+        ckpt = torch.load(weights, map_location=device, weights_only=False)  # v5.0 checkpoint is a pickled module
         model = Model(opt.cfg or ckpt['model'].yaml, ch=6, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
         if len(ckpt['model'].model) != len(model.model):
@@ -936,7 +936,9 @@ if __name__ == '__main__':
     parser.add_argument('--hyp-set', nargs='*', default=[], metavar='KEY=VALUE', help='override hyp entries, e.g. lr0=0.01 mosaic=0')
     parser.add_argument('--epochs', type=int, default=45)  # 【论文】 45 epochs
     parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
-    # 推断 (论文未给出): paper uses batch 12 on 2 GPUs; 8GB laptop -> batch 4 + accumulate to nominal 12
+    # 推断 (论文未给出): paper uses batch 12 on 2 GPUs; 8GB laptop -> batch 4 + accumulate to nominal 12.
+    # These defaults stay. On the 16GB lab server pass --batch-size 16 --workers 8 --device 0
+    # and set --nbs to the effective batch you want; see CLAUDE.md (nbs / accumulate / weight_decay).
     parser.add_argument('--nbs', type=int, default=12, help='nominal batch size for gradient accumulation (YOLOv5: 64)')
     # 推断 (论文未给出): paper only says the backbone is COCO-pretrained; neck transfer is optional
     parser.add_argument('--pretrain-neck', action='store_true', help='also copy COCO neck weights into the fused neck')
@@ -956,7 +958,7 @@ if __name__ == '__main__':
     parser.add_argument('--adam', action='store_true', help='use torch.optim.Adam() optimizer')
     parser.add_argument('--sync-bn', action='store_true', help='use SyncBatchNorm, only available in DDP mode')
     parser.add_argument('--local_rank', type=int, default=-1, help='DDP parameter, do not modify')
-    parser.add_argument('--workers', type=int, default=2, help='maximum number of dataloader workers (Windows: 2-4)')
+    parser.add_argument('--workers', type=int, default=2, help='maximum number of dataloader workers (laptop default 2; lab server: 8)')
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--entity', default=None, help='W&B entity')
     parser.add_argument('--name', default='exp', help='save to project/name')

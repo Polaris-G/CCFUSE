@@ -1,11 +1,12 @@
 # DroneVehicle (RGB-IR), converted by tools/prepare_dronevehicle.py
 # 640x512 crops (100 px white border removed), HBB from OBB, IR annotations on both sides.
 # Training validates on the official val split; use DroneVehicle_test.yaml to report test results.
+# Paths are relative to the repo root (run from ~/bzp/CCFUSE). Datasets sit beside the repo at ~/bzp/datasets.
 
-train_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/train
-val_rgb: D:/CCSFuse/datasets/DroneVehicle/rgb/images/val
-train_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/train
-val_ir: D:/CCSFuse/datasets/DroneVehicle/ir/images/val
+train_rgb: ../datasets/DroneVehicle/rgb/images/train
+val_rgb: ../datasets/DroneVehicle/rgb/images/val
+train_ir: ../datasets/DroneVehicle/ir/images/train
+val_ir: ../datasets/DroneVehicle/ir/images/val
 
 # number of classes
 nc: 5
