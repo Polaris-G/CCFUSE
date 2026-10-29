@@ -600,3 +600,8 @@ test 集评估（我运行，21 分钟）：runs\test\ccsfuse_m_test，日志 ru
 - 2026-10-17 01:26，train.py 在工作区被改动（用户确认不是有意操作，推测是 VS Code 中误操作或撤销过头）：第 6 步的优化器分组代码被撤回（λ 不进优化器、LayerNorm 被施加 weight decay），注释中还多了两个空格（`# SyncBa  tchNorm`）。
 - 不影响 ccsfuse_m：它在 10-15 启动、10-16 结束，启动日志中有 "3 extra parameter tensors"，λ 也从 1.0 变成了 1.11/0.889 等值，确实参与了训练。
 - 用 `git checkout -- train.py` 恢复后，1 epoch 检查中日志重新出现 "3 extra parameter tensors"，分组为 188/182/146。
+
+## CMFC 开启实验配置 v2（2026-10-29）
+- 原因：best.pt 中 proj mean|w| 约 2e-4~3e-3，lambda softmax 仍约 0.5，CMFC 基本未打开。
+- 改动：投影使用 small 初始化（std=1e-3），CMFC 参数学习率倍率设为 10。
+- 建议实验名：`ccsfuse_m_v2`。

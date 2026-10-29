@@ -25,6 +25,7 @@ import test  # import test.py to get mAP after each epoch
 from models.experimental import attempt_load
 from models.yolo import Model
 from models.yolo_test import Model
+from models.ccsfuse_modules import CMFC
 from utils.autoanchor import check_anchors
 from utils.datasets import create_dataloader, create_dataloader_rgb_ir # create_dual_dataloader,
 from utils.general import labels_to_class_weights, increment_path, labels_to_image_weights, init_seeds, \
@@ -125,7 +126,6 @@ def train(hyp, opt, device, tb_writer=None):
             pg0.append(v.weight)  # no decay
         elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
             pg1.append(v.weight)  # apply decay
-
     if opt.adam:
         optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
     else:
@@ -560,9 +560,29 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
             pg0.append(v.weight)  # no decay
         elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
             pg1.append(v.weight)  # apply decay
+    cmfc_lr_mult = hyp.get('cmfc_lr_mult', 1.0)
+    cmfc_no_decay, cmfc_decay = [], []
+    if cmfc_lr_mult > 1.0:
+        cmfc_param_ids = {id(p) for m in model.modules() if isinstance(m, CMFC) for p in m.parameters()}
+        pg0 = [p for p in pg0 if id(p) not in cmfc_param_ids]
+        pg1 = [p for p in pg1 if id(p) not in cmfc_param_ids]
+        pg2 = [p for p in pg2 if id(p) not in cmfc_param_ids]
+        for m in model.modules():
+            if isinstance(m, CMFC):
+                cmfc_decay_ids = {id(sub.weight) for sub in m.modules()
+                                  if isinstance(sub, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d))
+                                  and isinstance(sub.weight, nn.Parameter)}
+                for p in m.parameters():
+                    if not p.requires_grad:
+                        continue
+                    if id(p) in cmfc_decay_ids:
+                        cmfc_decay.append(p)
+                    else:
+                        cmfc_no_decay.append(p)
     # CCSFuse: parameters not named weight/bias (CMFC lambdas) are missed above -> add them without decay
     grouped = {id(p) for p in pg0 + pg1 + pg2}
-    extra = [p for p in model.parameters() if id(p) not in grouped]
+    extra = [p for p in model.parameters() if id(p) not in grouped and
+             not (cmfc_lr_mult > 1.0 and id(p) in cmfc_param_ids)]
     pg0.extend(extra)
     if extra:
         logger.info(f'Optimizer: {len(extra)} extra parameter tensors (e.g. CMFC lambdas) added to the no-decay group')
@@ -579,6 +599,13 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
 
     optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
     optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
+    if cmfc_lr_mult > 1.0:
+        optimizer.add_param_group({'params': cmfc_no_decay, 'lr': hyp['lr0'] * cmfc_lr_mult,
+                                   'initial_lr': hyp['lr0'] * cmfc_lr_mult, 'lr_mult': cmfc_lr_mult})
+        optimizer.add_param_group({'params': cmfc_decay, 'weight_decay': hyp['weight_decay'],
+                                   'lr': hyp['lr0'] * cmfc_lr_mult,
+                                   'initial_lr': hyp['lr0'] * cmfc_lr_mult, 'lr_mult': cmfc_lr_mult})
+        logger.info(f'Optimizer: CMFC lr multiplier {cmfc_lr_mult:g} ({len(cmfc_no_decay)} no-decay, {len(cmfc_decay)} decay tensors)')
     logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
     del pg0, pg1, pg2
 
