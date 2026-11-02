@@ -620,3 +620,193 @@ test 集评估（我运行，21 分钟）：runs\test\ccsfuse_m_test，日志 ru
 - 本次检查使用真实预训练权重、合成输入和目标，没有读取真实训练数据。真实数据 batch 检查尚待服务器执行。出现现有的 datasets.py 恒真 assert 和 torch.meshgrid 警告，未阻碍以上检查。
 - 临时检查脚本、完整日志和 JSON 结果保存在本地 `C:\Users\bzp02\Documents\ChatGPT\Coding 2\artifacts\ccfuse_cmfc_v2\`，未加入项目仓库。
 - 本阶段未提交、未推送、未连接服务器、未启动训练。后续服务器命令提供给用户，由用户执行。
+
+## GitHub 上传、服务器短检查与训练指令交接（2026-11-02）
+
+### 已执行：本地提交和上传
+
+- 在 `D:\Projects\CCFUSE` 使用实际 Git 身份提交 `WORKLOG.md` 与 `models/ccsfuse/yolov5m_cmfc_add_v2.yaml`，提交为 `5cb0b49e35081d655e7103368f5000cd062695e1`（Add CMFC-only v2 ablation configuration）。
+- 已推送 `origin/codex/cmfc-only-v2-ablation` 并通过 `git ls-remote` 核实本地/远端哈希一致；推送后工作区干净。未创建或合并 PR，未改动 main。
+
+### 用户日志确认：服务器检查
+
+- 服务器操作全部由用户执行，Codex 提供指令并分析回传输出，没有直接 SSH 连接服务器。
+- 同步前用户回传：`main/27b8214`、工作区干净、origin 为 `https://github.com/Polaris-G/CCFUSE.git`；`ccsfuse` 激活于 `/home/baozhipeng/.conda/envs/ccsfuse`，base 为 `/opt/miniforge3`。GPU 为 RTX 5060 Ti（16311 MiB），驱动 595.99.02，当时没有相关训练/测试/检查进程输出，GPU 仅少量桌面占用。
+- 已提供 `git fetch origin`、`git switch --track origin/codex/cmfc-only-v2-ablation` 及提交号核对指令，目标提交为上述 `5cb0b49`。用户随后运行新配置并贴回短检查输出；未贴回同步后的 `git rev-parse HEAD`，因此服务器实际 HEAD 哈希未独立确认。
+- 用户实际运行的真实数据短检查命令（仓库根目录、ccsfuse 环境）：
+
+```bash
+python tools/check_model.py \
+  --cfg models/ccsfuse/yolov5m_cmfc_add_v2.yaml \
+  --weights weights/yolov5m.pt \
+  --data data/multispectral/DroneVehicle.yaml \
+  --hyp data/hyp.ccsfuse_dronevehicle_v2.yaml \
+  --batch-size 2 --img-size 640
+```
+
+- 真实预训练加载：rgb 306/306、ir 306/306，共 612/890；两路 Focus 与 COCO 第 0 层权重比较均为 True。`CFT intersect_dicts would transfer 157/890` 是旧方式对照，不是本次实际加载结果。
+- 数据：两路 train 均扫描到 17990，0 missing、33 empty。本次 batch 为 `(2,6,640,640)`，20 个目标。IR 行显示 RGB cache 路径是已知打印问题。
+- 第 27/28/29 层均为 PairAdd，尺寸分别为 `(2,192,80,80)`、`(2,384,40,40)`、`(2,768,20,20)`；Detect 为 `(2,3,80,80,10)`、`(2,3,40,40,10)`、`(2,3,20,20,10)`。
+- loss 1.999，box/obj/cls 为 0.122/0.065/0.814；loss finite=True、grads finite=True。此为单 batch 检查数值，不是训练精度。
+- 参数 53.79M；640 输入 GFLOPs 为 thop 93.44、flop_counter 94.48；batch 2 AMP 前向/反向峰值 allocated 显存 1.85 GiB，不能据此声称 batch 12 已验证。
+- 三个 CMFC 的分支初始权重均为 0.50/0.50，属正常初始化。torch.meshgrid 未来参数警告未阻碍本次运行。
+- 判断：用户回传的真实数据短检查通过；只证明该 batch 计算正常，不代表长训练已经成功或精度提升。
+
+### 仅已交付：正式训练指令
+
+- 用户在短检查通过后明确索要训练指令，已提供以下命令。**没有收到启动/首个 epoch 日志，实际启动状态、保存目录、训练进度与 batch 12 显存仍待用户输出确认。**
+- 先在服务器执行 `tmux new -s cmfc_only_v2`；进入会话后 `conda activate ccsfuse`、`cd ~/bzp/CCFUSE`，检查 `git status --short` 无意外改动，并核对代码提交。
+
+```bash
+python train.py \
+  --cfg models/ccsfuse/yolov5m_cmfc_add_v2.yaml \
+  --weights weights/yolov5m.pt \
+  --data data/multispectral/DroneVehicle.yaml \
+  --hyp data/hyp.ccsfuse_dronevehicle_v2.yaml \
+  --epochs 45 --img-size 640 640 \
+  --batch-size 12 --workers 8 --device 0 --nbs 12 \
+  --name cmfc_only_m_v2_b12
+```
+
+- 启动日志核对 small/std=0.001、CMFC lr multiplier 10、两路 306/306 和 `Logging results to`。实验名为计划值，出现目录后缀时以实际日志为准；训练前还应确认同名实验是否已经存在，避免重复启动。
+- tmux 脱离：Ctrl+B 后 D；返回：`tmux attach -t cmfc_only_v2`。仅在原进程已停止、该实验尚未完成时，用实际目录续训：`python train.py --resume runs/train/cmfc_only_m_v2_b12/weights/last.pt`。
+- 下一步：分析用户提供的启动日志和首个 epoch 输出，再更新当前训练状态。训练完成后按独立 val 的 `--conf-thres 0.001 --iou-thres 0.5 --task val` 口径评估。
+
+### 文档维护约定
+
+- 用户要求每次完成项目任务后更新 `CLAUDE.md` 和 `WORKLOG.md`；已写入 CLAUDE.md 的工作约定。
+- 本次更新两份文档，补齐已上传版本、服务器环境与真实数据检查、训练指令交付和待确认事项；替换 CLAUDE.md 过期的当前进度、Git 身份/分支说明及不适用于 v2 的日志要求，保留历史结果。
+- 本次仅修改文档，检查文档差异和格式；没有改动模型、训练代码或实验配置，没有重复运行模型检查或操作服务器。本次文档改动暂未提交/推送。
+
+## CMFC-only v2 训练完成，独立 val 待执行（2026-11-02）
+
+- 来源：用户粘贴的服务器终端输出。已显示 epoch 44/44、1500/1500 batches 和 `45 epochs completed in 6.660 hours.`；据此记录 45 个 epoch 已完成，用时 6.660 小时。
+- 末轮训练损失：box 0.02888、obj 0.05147、cls 0.00541、total 0.08576；img_size 640。训练日志显示 gpu_mem 13.7G，不将它写成已核实的峰值 allocated 显存。
+- 末轮训练内 val：1469 图像、24490 个目标。下面均为百分数，属于训练内验证，不是 best.pt 的独立评估：
+
+| 类别 | P | R | mAP50 | mAP75 | mAP50:95 |
+|---|---:|---:|---:|---:|---:|
+| all | 69.7 | 65.8 | 68.1 | 56.2 | 46.5 |
+| car | 86.6 | 96.0 | 97.5 | 82.1 | 67.2 |
+| truck | 63.0 | 61.5 | 64.3 | 46.0 | 40.0 |
+| freight car | 47.7 | 59.5 | 52.8 | 41.9 | 34.9 |
+| bus | 92.3 | 88.5 | 93.1 | 86.6 | 68.8 |
+| van | 59.1 | 23.3 | 33.0 | 24.3 | 21.3 |
+
+- 训练内 NMS IoU 为 0.6；已有四组独立 val 使用 IoU 0.5、conf 0.001 和各自 best.pt。现有 best.pt 按 0.1*mAP50 + 0.9*mAP75 选取，不保证来自最后一轮或取得最高 mAP50。暂不将本次末轮数值并入独立评估对照表，也不据此断言模块优劣。
+- 用户只提供末轮与训练完成输出，实际 `Logging results to` 和服务器 HEAD 尚未回传。计划目录为 `runs/train/cmfc_only_m_v2_b12`；有后缀时以实际目录替换，不能声称该路径已确认。
+- 已交付以下独立 val 指令（仅提供，由用户在服务器执行；结果尚未回传）：
+
+```bash
+python test.py \
+  --data data/multispectral/DroneVehicle.yaml \
+  --weights runs/train/cmfc_only_m_v2_b12/weights/best.pt \
+  --batch-size 12 --img-size 640 \
+  --conf-thres 0.001 --iou-thres 0.5 \
+  --task val --device 0 \
+  --name cmfc_only_m_v2_b12_val
+```
+
+- 记录本次结果时发现旧本地仓库路径不存在，因此先将原始数值暂存为 pending_training_completion_2026-11-02.json；随后在下述项目恢复任务中正式补入两份文档。
+
+## 本地仓库恢复到 D:/project/CCFUSE（2026-11-02）
+
+- 用户报告本地文件夹丢失，要求在 D 盘新建 project 文件夹恢复项目。原 D:/Projects/CCFUSE 与 D:/CCSFuse 无法找到，新目标 D:/project/CCFUSE 原本不存在。
+- 只读核对 GitHub：main 为 27b8214，codex/cmfc-only-v2-ablation 为 5cb0b49e35081d655e7103368f5000cd062695e1。新建 D:/project 后克隆完整仓库（非浅克隆、非 single-branch），检出实验分支；远端其他分支与完整 Git 历史仍可访问，origin 保持 https://github.com/Polaris-G/CCFUSE.git。
+- 恢复代码的实际命令：
+
+```powershell
+git clone --branch codex/cmfc-only-v2-ablation -- https://github.com/Polaris-G/CCFUSE.git D:/project/CCFUSE
+git -C D:/project/CCFUSE fsck --full
+```
+
+- 克隆后 HEAD 为上述 5cb0b49，工作区干净，git fsck --full 通过。新配置解析结果与提交内容一致，并仍只在三处融合层区别于完整版 v2；没有重跑训练或 GPU 检查。
+- 此前未上传的 CLAUDE.md / WORKLOG.md 修改从当前聊天工作区的 update_docs.py 重建，保留当时历史状态；另补回脚本之外的路径修正及历史待办。当前有效路径改为 D:/project/CCFUSE，历史操作路径不做全局替换。
+- 同时把用户已回传的 45 epoch 训练完成结果写入文档，当前下一步为 best.pt 独立 val，不能再把本轮训练记为“尚未启动确认”。
+- 回收站 Shell 元数据和可读的 D 盘回收记录未找到匹配旧路径的可用副本，另有一处访问受限，不能声称全盘排除。恢复来源是 GitHub 和留存记录，不是磁盘级找回。
+- 本次恢复了已提交代码/配置及能够重建的文档、检查记录；未恢复 Git 忽略的数据集、权重、训练产物或论文。未连接或修改服务器，服务器文件仍由用户检查/管理。
+- 历史检查日志、19 项 PASS 结果、原检查脚本、交接文档及训练完成记录副本保存到本地 runs/recovery_2026-11-02/（被 Git 忽略）。历史检查脚本保留旧绝对路径，仅作证据，不应直接当作新目录中的可运行检查脚本。
+- 本次恢复的文档修改尚未提交/推送。最终核对仅 CLAUDE.md、WORKLOG.md 存在工作区差异，代码与配置保持 GitHub 5cb0b49 原样；文档快照另存聊天工作区供再次恢复。
+
+## CMFC-only v2 独立 val 回传与消融对比（2026-11-02）
+
+- 来源：用户本次粘贴的评估终端输出。虽然用户称为 test 结果，日志标记 val、图像 1469、目标 24490，与验证集一致；不是 DroneVehicle 的 8980 张 test 集。两路 val 扫描均为 1469 found、0 missing、2 empty。
+- 按此前交付的命令，将其记录为 CMFC-only v2 的 best.pt 独立 val：batch 12、640、conf=0.001、NMS IoU=0.5、task val。该归类依据连续对话，输出片段未直接包含完整启动命令、权重路径、保存目录或服务器 HEAD；不声称已独立核实这些元数据。计划权重路径仍为 runs/train/cmfc_only_m_v2_b12/weights/best.pt，实际路径可能带后缀。
+- 原输出数值换算为百分数如下；P/R 为脚本选定工作点的值，不等于全阈值表现：
+
+| 类别 | P | R | AP50 | AP75 | AP50:95 |
+|---|---:|---:|---:|---:|---:|
+| all | 72.2 | 65.2 | 68.4 | 56.4 | 46.7 |
+| car | 91.1 | 96.1 | 97.9 | 82.3 | 67.5 |
+| truck | 63.2 | 60.4 | 64.2 | 45.9 | 40.0 |
+| freight car | 49.9 | 58.7 | 53.2 | 42.0 | 35.1 |
+| bus | 93.4 | 88.3 | 93.2 | 86.6 | 69.1 |
+| van | 63.2 | 22.7 | 33.6 | 25.1 | 21.7 |
+
+### 独立 val 总体对比
+
+- 前四个已有配置来自交接中的独立 val 记录，本次新增 CMFC-only v2。以下均为百分数，末轮训练内的 68.1/56.2/46.5 不放入此表：
+
+| 实验 | mAP50 | mAP75 | mAP50:95 |
+|---|---:|---:|---:|
+| Add 基线 | 68.8 | 56.1 | 46.8 |
+| CMFC-only v2 | 68.4 | 56.4 | 46.7 |
+| AFSF-only | 69.2 | 56.2 | 47.2 |
+| 完整版 v2 | 70.7 | 59.9 | 49.2 |
+| 完整版 v3 | 67.5 | 55.1 | 45.9 |
+
+- CMFC-only v2 相对 Add 基线：mAP50 -0.4、mAP75 +0.3、mAP50:95 -0.1 个百分点。
+- 相对 AFSF-only：-0.8/+0.2/-0.5 个百分点；相对完整版 v2：-2.3/-3.5/-2.5；相对完整版 v3：+0.9/+1.3/+0.8。
+- 分类差值（CMFC-only v2 减 Add 基线，单位为百分点）：
+
+| 类别 | ΔAP50 | ΔAP75 | ΔAP50:95 |
+|---|---:|---:|---:|
+| car | -0.1 | +0.1 | +0.0 |
+| truck | -0.8 | +3.1 | +0.9 |
+| freight car | +1.1 | +2.7 | +1.8 |
+| bus | -2.1 | -1.8 | -2.2 |
+| van | +0.0 | -3.0 | -1.4 |
+
+### 结论与下一步
+
+- 当前单次结果中，CMFC 单独加入未带来明确的总体增益；freight car 改善，bus 下降，van AP50 与基线相同且更高 IoU 下退步。不能把 -0.4 或 -0.1 个百分点解释为稳定统计结论。
+- 完整版 v2 仍是当前最好的一组，比 CMFC-only 高 2.3/3.5/2.5 个百分点；相对 CMFC-only 的 AP50 增益在 freight car 为 +4.6、van +4.1、bus +2.1。结果与两个模块可能有配合作用的解释一致，但尚未证明机制，不支持据单模块结果直接删除 CMFC。
+- van 在此次评估工作点召回为 22.7%，需结合已有 PR 曲线、混淆矩阵和错例区分漏检、分类混淆与定位问题；不要仅凭一个 P/R 工作点断言所有阈值表现。
+- 下一步建议先归档实际权重与输出目录、分析已有 bus/van 错例，保留完整版 v2 作为当前参考。若要据小差异做结构取舍，再用重复 seed 验证。未新增训练、未修改模型或学习率，服务器仍由用户操作。
+- 本轮已同步更新 CLAUDE.md 的当前状态和对比表，并在此追加完整指标；保留之前恢复的未提交文档改动。本轮只做文档和数值核对，不重复运行模型测试；文档改动仍未提交/推送。
+
+## bus/van 离线错误诊断工具与服务器指令（2026-11-02）
+
+- 用户要求下一步，并补充 `Results saved to runs/test/cmfc_only_m_v2_b12_val`，确认这是服务器上的实际评估目录。Codex 只能访问本地 D:/project/CCFUSE 和用户贴回的输出，不能直接看到服务器文件；服务器同步和诊断运行继续由用户执行。
+- 只读审计发现：独立 test.py CLI 默认 save_txt/save_conf=True，导出 labels/<image_stem>.txt，每行为 `class xc yc w h confidence`，坐标还原到原图后归一化。CLI 默认 plots=False 且未提供 --plots，因此该独立评估不保证存在 PR/混淆图，优先复用现有 TXT。
+- 原 ConfusionMatrix 的调用/实现会跳过部分零预测、零 GT 或无匹配情况；本轮不修改它、test.py、训练逻辑或既有指标，而新增独立离线工具。
+
+### 本地实现与检查
+
+- 新增 tools/diagnose_detections.py：只依赖现有 NumPy/PyYAML 及标准库，不加载 torch/权重，不调用模型、不读写图片内容、不写入任何输入目录。遍历完整 val 图片列表，读取对应 RGB 侧真值和导出预测，空 GT/空预测均计数；图片只用于列举完整样本及错例路径。
+- 输入核对包括图像/目标总数、5/6 列格式、类别/数值/归一化坐标、重复 stem、重复行、错分割的额外预测文件以及每图超过当前 NMS max_det=300 的异常。GT 要求正面积；原图裁剪后可能出现的零面积预测保留为 FP。已存在的输出目录拒绝覆盖。
+- 因 test.py 对零预测图片不生成 TXT，缺 TXT 默认为错误；只有在用户确认导出完整时才使用 --allow-missing-predictions，将缺文件按零预测计入。本次用户已提供完整评估指标与结束保存目录；该显式参数仍不代替完整性来源核实。不能用 save_hybrid 导出或重复 --exist-ok 追加污染的预测做此诊断。
+- 默认对 confidence 0.05/0.25/0.5 与匹配 IoU 0.5/0.75 的 6 种组合统计。先按同类 IoU 降序贪心一对一配对 TP，再对剩余框进行跨类别配对；每个真值和保留预测均计入矩阵。固定阈值 FP/FN 与混淆类别按这一诊断定义计算，不替代原 AP，也不一定等于 test.py 平均 F1 最大工作点的 P/R。
+- 未匹配真值按最佳同类/跨类框的 IoU 标记 assignment_conflict、localization_candidate、class_localization_candidate、no_overlap_candidate；定位候选的最低 IoU 默认 0.1。这些是排查线索，不是已证实的错误机制。不能据 NMS 后 TXT 还原被抑制或低于导出阈值的候选。
+- 输出 summary.txt、summary.json、threshold_summary.csv、每种阈值的 confusion_*.csv，以及 bus/van 的 examples.csv。混淆矩阵行是预测类别、列是真实类别，额外行/列分别表示未匹配真值/预测；错例按文件名顺序每类/错误/阈值最多 20 条，不声称代表全体分布。JSON 保存工具 SHA256、实际命令、数据/预测路径、覆盖情况及全部类别计数。
+- 新增 tools/test_detection_diagnostics.py：39 项测试通过，包含零 GT/预测/完全无匹配、TP 优先、错类、疑似定位、重复预测、阈值边界、零面积预测、输入不变、完整 CLI 输出、拒绝覆盖、错分割/不完整导出等。独立审阅发现的错例关联与近邻阈值文件名冲突已修复并有回归用例；最终增加来源元数据后另跑 5 项 CLI 测试也全部通过。
+- 验证使用合成标签/预测和模拟图片文件名，没有本地真实数据验证，也未在服务器运行。测试日志保存在当前聊天工作区 artifacts/ccfuse_diagnostics/。
+
+### 交付给用户的服务器命令
+
+- 以下命令由用户从 ~/bzp/CCFUSE、已激活的 ccsfuse 环境执行。先确认 git status --short 没有意外改动，再切到实验分支并快进同步本轮提交；不要求用户改服务器模型代码。
+
+```bash
+git switch codex/cmfc-only-v2-ablation
+git pull --ff-only origin codex/cmfc-only-v2-ablation
+python tools/diagnose_detections.py \
+  --data data/multispectral/DroneVehicle.yaml \
+  --pred-dir runs/test/cmfc_only_m_v2_b12_val/labels \
+  --output runs/diagnostics/cmfc_only_m_v2_b12_val \
+  --expected-images 1469 --expected-labels 24490 \
+  --allow-missing-predictions
+```
+
+- 预期输出目录为 runs/diagnostics/cmfc_only_m_v2_b12_val；如果目录已存在，选择新的输出目录，不覆盖旧报告。运行后回传 summary.txt（命令本身也会打印该摘要）。若缺 6 列预测、输入校验失败或文件不完整，先回传错误，不自动重新推理或训练。
+- 下一步根据用户实际诊断摘要比较不同 confidence/IoU 下的 bus/van 漏检、错类与定位线索，再决定是否检查原图错例或运行其他已完成实验的同口径离线诊断。本次尚未获得任何服务器诊断结果。
+- 本轮将此前未提交的恢复/实验文档更新与上述两个工具文件一起提交到 codex/cmfc-only-v2-ablation，通过 GitHub 交付；提交和推送结果以本轮实际 Git 返回的哈希为准。没有合并 main、重训或直接连接服务器。
