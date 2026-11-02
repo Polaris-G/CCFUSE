@@ -980,3 +980,24 @@ python tools/compare_detections.py \
 **仅交付检查，不启动训练。** 下一步由用户在服务器先看git status，再只读列出runs/train/*/opt.yaml、hyp.yaml，定位旧Full v2实际训练目录并核实初始化、模型、超参和其他运行选项。历史实际运行设置尚未完整回传，不能提前写成新旧完全同条件；核对后再交付从相同COCO初始化、仅cls变化的完整训练命令。当前没有向用户交付开跑命令，没有训练、评估、SSH或修改服务器。无需为继续追XML停住此参数核验。
 
 本轮起点为codex/cmfc-only-v2-ablation的9bb274288ebf892bf9e2f13320d335aa3f4f4225，文档更新前git status确认干净。仅更新CLAUDE.md当前进度/下一步并在WORKLOG.md追加此记录，保留历史内容；文档提交和远端核验由主代理随后处理，不在此预报完成。
+
+
+## 旧Full v2运行配置核实与cls1训练指令交付（2026-11-02）
+
+**用户服务器证据。** 用户回传旧Full v2目录runs/train/ccsfuse_m_v2的完整opt.yaml与hyp.yaml。核实初始化路径weights/yolov5m.pt、模型models/ccsfuse/yolov5m_ccsfuse_v2.yaml、45 epoch、图像尺寸640、batch_size=12、nbs=12、workers=8、rank=-1单卡、SGD、pretrain_neck=False、hyp_set为空、cls=0.5、cmfc_lr_mult=10；与此前计划一致。用户同时贴出的v3位于runs/train/ccsfuse_m_v3，使用同一模型cfg但cmfc_lr_mult=30，不作为本轮cls对照的配置来源。git status显示实验分支工作区干净，但本次没有服务器HEAD输出；不得把本地当前提交推定为服务器当前提交。
+
+**本轮交付的额外诊断实验。** 新实验单独命名ccsfuse_m_v2_cls1_b12，复用旧run的runs/train/ccsfuse_m_v2/hyp.yaml并通过--hyp-set cls=1.0仅覆盖全局分类损失增益。该hyp是在train_rgb_ir缩放之前保存的，读取它继承旧run实际超参；新一轮仍从weights/yolov5m.pt初始化，不从旧Full v2 best.pt微调或续训。其余运行选项沿用已核实旧opt：相同模型、数据、45 epoch、640、batch12/nbs12、workers8、单卡SGD、相同初始化范围、CMFC倍率10等。旧hyp只读，不改仓库源码或YAML，也不改旧实验目录。cls有效增益从0.03125变0.0625，影响所有类别的分类项，不是van频率再平衡，可能无效或影响其他类。
+
+该轮是额外诊断/调参实验，独立命名归档，不覆盖旧Full v2、不混入原有同协议模块消融表。初始化路径相同不证明该文件在历史运行与现在的内容哈希相同；单卡rank=-1对应代码seed1，但相同seed不保证逐bit重现。保留这些证据边界，不宣称完全相同的随机运行轨迹。
+
+**用户执行与续训约定。** 本轮正式交付由用户在服务器tmux中运行的完整命令，关键参数为--hyp runs/train/ccsfuse_m_v2/hyp.yaml --hyp-set cls=1.0 --name ccsfuse_m_v2_cls1_b12。新输出目录runs/train/ccsfuse_m_v2_cls1_b12若已存在，拒绝按新一轮启动，不覆盖或自动换名混淆本轮身份；若确为本轮中断，续训命令为：
+
+```bash
+python train.py --resume runs/train/ccsfuse_m_v2_cls1_b12/weights/last.pt
+```
+
+已静态审查resume路径：读取新run保存的opt.yaml，恢复其opt.hyp与hyp_set，再加载旧run的缩放前hyp并应用cls=1.0覆盖。因此此轮不移动或更改旧run hyp路径及内容。启动后请用户核对超参打印cls=1.0、CMFC学习率倍率10、预期保存目录，并贴回前1轮日志；完成后使用同口径独立val比较van与总体AP及其他类别。固定阈值TP增加不是单独成功标准。
+
+**本地轻量核验。** 主代理从train.py的AST仅提取实际argparse定义，解析最终启动参数，断言cls覆盖、45 epochs、640/640、batch12/nbs12及默认SGD、不开pretrain_neck/image-weights/rect/multi-scale等设置；检查通过，没有导入torch、模型或真实数据，也未新增仓库代码。续训链路经第二代理只读独立复核通过。
+
+**实际状态与改动范围。** 截至本轮记录只有配置回传和命令交付，没有训练启动、首轮、完成或新评估日志，不能记为训练已启动或完成。助手没有SSH、启动训练、修改服务器、改源码或实验YAML。本轮仅更新CLAUDE.md当前状态并追加WORKLOG.md；旧历史保留，不重复模型测试。文档更新前本地工作区干净，起点25ee002d8f768e49e82a4eff57efd3722a86a837；提交和远端核验由主代理随后完成，本记录不预报结果。
