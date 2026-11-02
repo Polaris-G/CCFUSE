@@ -605,3 +605,18 @@ test 集评估（我运行，21 分钟）：runs\test\ccsfuse_m_test，日志 ru
 - 原因：best.pt 中 proj mean|w| 约 2e-4~3e-3，lambda softmax 仍约 0.5，CMFC 基本未打开。
 - 改动：投影使用 small 初始化（std=1e-3），CMFC 参数学习率倍率设为 10。
 - 建议实验名：`ccsfuse_m_v2`。
+
+## 本地 CMFC-only v2 配置准备与检查（2026-11-02）
+
+- 工作目录：`D:\Projects\CCFUSE`；从 `main/27b8214` 创建 `codex/cmfc-only-v2-ablation`。开始时工作区干净，`git ls-remote origin refs/heads/main` 返回同一提交。
+- 新增 `models/ccsfuse/yolov5m_cmfc_add_v2.yaml`。解析后的配置与完整版 `yolov5m_ccsfuse_v2.yaml` 相比，仅第 27/28/29 层由 AFSF 改为 PairAdd；主干、CMFC、回注、head、anchors 和 pretrain_map 完全相同。保留但不使用顶层 afsf 参数。
+- 沿用 v2 推断设置：`proj_init: small`、`proj_std: 1.0e-3`、`cmfc_inject: A`；配套使用现有 `data/hyp.ccsfuse_dronevehicle_v2.yaml`，`cmfc_lr_mult: 10.0`。旧配置与训练代码未改动。
+- 本地实际环境：`D:\Miniconda\envs\ccsfuse\python.exe`，Python 3.10.22、torch 2.5.1+cu124、numpy 1.23.5，RTX 3070 Ti Laptop GPU。
+- 结构检查通过：3 个 CMFC、3 个 PairAdd、0 个 AFSF，未融合参数量 53,793,312。六个输出投影的初始化 std 均接近 0.001。
+- 只读使用已有真实 COCO 权重 `D:\CCSFuse\weights\yolov5m.pt`；两路均为 306/306，共加载 612 个 state_dict 张量。逐张量比对全部一致，RGB/IR Focus 权重也分别与 COCO 第 0 层一致；未加载 neck。
+- 单独执行现有 `train_rgb_ir` 的优化器分组代码块，483 个参数张量均且仅被收集一次；CMFC 参数全部进入倍数 10 分组，3 个 lambda 均在不衰减组。没有调用训练函数或 optimizer.step()。
+- 合成输入 batch 2、640x640：FP32 推理输出为 `(2,25200,10)`，Detect 三层分别为 `(2,3,80,80,10)`、`(2,3,40,40,10)`、`(2,3,20,20,10)`，全部有限；PairAdd 特征尺寸为 `(2,192,80,80)`、`(2,384,40,40)`、`(2,768,20,20)`。
+- 合成目标上的 CUDA AMP 检测损失反向通过：loss 约 1.815743（仅冒烟检查数值，不是实验指标），所有参数都有有限梯度，两路输入和三个 lambda 均有非零梯度。该短检查峰值 allocated 显存约 1.846 GiB，不代表长训练显存。
+- 本次检查使用真实预训练权重、合成输入和目标，没有读取真实训练数据。真实数据 batch 检查尚待服务器执行。出现现有的 datasets.py 恒真 assert 和 torch.meshgrid 警告，未阻碍以上检查。
+- 临时检查脚本、完整日志和 JSON 结果保存在本地 `C:\Users\bzp02\Documents\ChatGPT\Coding 2\artifacts\ccfuse_cmfc_v2\`，未加入项目仓库。
+- 本阶段未提交、未推送、未连接服务器、未启动训练。后续服务器命令提供给用户，由用户执行。
