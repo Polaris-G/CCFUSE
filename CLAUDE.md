@@ -107,7 +107,7 @@ python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip
 - v5.0 主干结构：第 0 层 Focus，第 8 层 SPP；P3 / P4 / P5 来自第 4 / 6 / 9 层（均为 C3）；通道数 m 版 192 / 384 / 768，s 版 128 / 256 / 512。
 
 ### git
-- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。当前分支 `codex/cmfc-only-v2-ablation`；本轮从 `1e6e4de` 继续实现逐目标诊断。开始前本地与远端同哈希，main 为 `27b8214`；没有合并 main。本轮保留并纳入此前 CLAUDE.md、WORKLOG.md 的交接/纠错改动和新交接文档。本轮工具和文档已由提交 `725f420d2048d891ac934e3e3d5b1efbf541ba61` 上传并核对远端分支；服务器逐目标摘要已回传，真实PNG/逐目标CSV尚待用户提供。实际 HEAD 以 `git log -1` 为准。
+- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。当前分支 `codex/cmfc-only-v2-ablation`；本轮从 `1e6e4de` 继续实现逐目标诊断。开始前本地与远端同哈希，main 为 `27b8214`；没有合并 main。本轮保留并纳入此前 CLAUDE.md、WORKLOG.md 的交接/纠错改动和新交接文档。本轮工具和文档已由提交 `725f420d2048d891ac934e3e3d5b1efbf541ba61` 上传并核对远端分支；服务器逐目标摘要已回传；本地现已收到van_review.zip并完成4350行CSV及12张真实PNG的只读检查。实际 HEAD 以 `git log -1` 为准。
 - `server-linux` 是历史迁移分支记录。`.gitignore` 忽略 `__pycache__/`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`；不要提交原始数据、训练产物或权重。
 - 未跟踪、不要提交：`.vscode/`（VS Code 设置）、论文 PDF。
 - 提交使用实际本地 Git 配置。2026-11-02 已通过 `git var GIT_AUTHOR_IDENT` / `GIT_COMMITTER_IDENT` 确认身份并完成提交，不沿用旧文档里的临时姓名/邮箱覆盖配置。
@@ -294,7 +294,7 @@ Windows 本地代码检查在 `D:\project\CCFUSE` 下运行，解释器为已核
 
 ## 当前进度（2026-11-02）
 
-- 已收到三组离线诊断及真实逐目标对照摘要。用户服务器已同步到 `cdf5850`；1469张图、24490个GT、725个van，六组阈值重算均与原报告一致，生成72张PNG、0个渲染错误。三组缺失TXT均为 `01322.jpg`，该图GT=0，不贡献本次FN；这不单独证明原始导出完整。来源为用户终端日志，本地没有直接读取服务器文件或查看真实PNG。旧交接为历史快照，当前状态以本节及WORKLOG最新记录为准。
+- 已收到三组离线诊断及真实逐目标对照摘要。用户服务器已同步到 `cdf5850`；1469张图、24490个GT、725个van，六组阈值重算均与原报告一致，生成72张PNG、0个渲染错误。三组缺失TXT均为 `01322.jpg`，该图GT=0，不贡献本次FN；这不单独证明原始导出完整。生成数量来源为用户终端日志；用户随后提供van_review.zip，本地已读取其中完整CSV与12张真实PNG，没有直接访问服务器。旧交接为历史快照，当前状态以本节及WORKLOG最新记录为准。
 - 数值更正：按原交接基线 freight car/bus AP50:95=33.8/70.3，CMFC-only 相对差值为 +1.3/−1.2 个百分点；此前 WORKLOG 与派生 JSON 的 +1.8/−2.2 是混列转录错误，现已更正。总体指标不变。历史快照及历史解释不自动成为当前结论。
 
 - 已收到基线、CMFC-only v2、AFSF-only、完整版 v2/v3 的独立 val 结果。前四个已有配置的数值来自 2026-11-02 交接，CMFC-only v2 来自用户本次输出；统一为 1469 张 val 图像、24490 个目标。用户将本次称为 test 结果，但这是 test.py 对 val 数据的评估，不是 8980 张 test 集。不要混入历史 test 或训练末轮指标，也不要重复启动已完成的实验。
@@ -320,7 +320,11 @@ Windows 本地代码检查在 `D:\project\CCFUSE` 下运行，解释器为已核
 - 工具核对三组重算混淆矩阵及各类计数与旧报告一致、只接受旧报告已记录的缺TXT，保存当前输入SHA256并列出缺TXT图片的GT类别。旧报告没有原始输入内容哈希，所以同汇总数的内容变化未必被识别；也不能由TXT核实checkpoint或NMS参数。已有输出拒绝覆盖，禁止向输入目录写入。
 - 输出 `summary.txt/json`、`paired_targets.csv`、`transitions.csv`、`selection.csv`、`README.txt`及 `images/*.png`。主图工作点为conf=0.25、匹配IoU=0.5，每组固定seed抽样10个；两行RGB/IR、四列GT/Add/CMFC/full。两行叠加的是同一组融合预测，不是单模态评估。候选最高van/car分数使用全部保存框，与阈值匹配分开记录；无候选记空而非0。组可重叠，样本不代表总体比例。
 - 【本地验证】17项合成/CLI测试通过，包含同汇总但不同GT、gain/loss互抵、阈值变化、输入保护、报告不一致拒绝及八面板端到端；合成八面板已视觉检查。原诊断工具未修改；本地未运行真实DroneVehicle数据。
-- **下一步**：逐目标工具已在服务器完成，不重复运行。读取 `runs/diagnostics/van_three_model_comparison` 下的paired_targets.csv、transitions.csv、selection.csv及真实PNG；优先看三组共同van→car、Full检对但CMFC检错、CMFC检对但Full检错，以及Add检对但CMFC检错四组，各先选3例，并结合完整CSV检查候选分数/跨阈值身份变化。用户打包并提供报告和图片后再判断标注、外观、分数或定位因素；当前不改模型/损失、不新增训练。
+- 【本地真实产物复核】已检查用户提供的van_review.zip：4350行=725个van×6场景，完整报告及12张定向抽样PNG。conf=0.25、IoU=0.5时，CMFC→Full新增86个TP在conf=0.05时两组全部已为TP；对应CMFC van候选分数均在[0.05,0.25)，Full均≥0.25，分数中位0.1708→0.3167、候选IoU中位0.8539→0.8708。不能解释为原来完全没定位到，也不能证明仅为校准。
+- 三组共同van→car的289个GT中，Add/CMFC/Full存在几何合格van候选的数量为289/288/289；凡同时存在van/car候选，car分数均更高。Full的van/car分数中位0.0198/0.7803，其中207个van分数<0.05。按全部725个GT归一化面积四分位，共同错误比例为125/182、96/181、58/181、10/181（68.7%、53.0%、32.0%、5.5%）；是尺度相关性，不证明调分辨率有效。两个阈值下共同错类集合交集为148，不能把低阈值153个全部视作289的子集。
+- TP-first口径提醒：Full的281个TP中41个仍存在分数高于van的几何合格car候选；新增86个中有18个。候选来自保存的NMS后框，检测分数不是单独的分类概率或objectness。12张图无明显统一裁边/平移问题，但有暗RGB小车和长封闭货厢车均标van；不能凭外观判错标，样本不代表总体比例。
+- **下一步**：先确认服务器是否保留原始XML/标注压缩包及convert_stats.json；用户目前不确定，已准备仅在~/bzp/datasets内的只读查找命令。若找到，优先按坐标追溯00974#6、00827#38、01167#19、00683#9、00762#5、00783#1六个GT（#为非空YOLO行从0开始，不等于XML对象序号）。确认源标签与转换关系后再选单变量实验；若没有原XML，保留标注来源未核验的限制，不自动改val标签。现阶段不改训练/损失、不新增训练。
+- 【独立代码审计】car/van映射与data YAML一致；当前BCE分类损失未使用model.class_weights，不能直接开--image-weights（双流dataset.n/indices链路不兼容）。单卡默认loader无shuffle；本地AST提取factory、真实torch与合成17对ID验证为SequentialSampler，两epoch顺序相同。这是独立可检验因素，不是当前错误的已证明原因。本轮仅记录，未改变既有训练协议。
 - 离线诊断默认置信度 0.05/0.25/0.5、匹配 IoU 0.5/0.75；先匹配同类 TP，再匹配剩余跨类框。输出固定阈值 TP/FP/FN、混淆矩阵、疑似定位问题及错例 CSV。该匹配口径是诊断启发式，不等于原 AP 匹配，也不要求重现原评估的 van R=22.7%；只观察已保存的 NMS 后预测。
 - 历史单模型诊断工具曾通过 39 项合成边界/命令行测试；补充工具哈希和执行命令元数据后，5 项 CLI 检查再次通过。保持完整版 v2 作为当前参考；依据小差异做结构取舍需后续多 seed，当前不自动启动新训练。
 - 口径提醒：训练末轮验证 NMS IoU 为 0.6，不能与上述独立 val 混比；现有 best.pt 按 `0.1*mAP50 + 0.9*mAP75` 选取，不代表最高 mAP50。继续保留旧实验，不顺带修改 seed、选优规则、优化器或调度。

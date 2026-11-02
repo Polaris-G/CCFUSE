@@ -923,3 +923,29 @@ python tools/compare_detections.py \
 - 下一步只读取已有产物，打包完整summary.json/txt、paired_targets.csv、transitions.csv、selection.csv、README.txt和四组各3个PNG：all_three_to_confusing_class、full_tp_cmfc_miss、cmfc_tp_full_miss、add_tp_cmfc_miss。同一PNG去重，最多12张，不重新运行诊断或模型。这些是现有固定seed样本的一部分，用来目检，不代表总体错误比例。
 - 打包命令由用户在服务器执行；预计输出 `runs/diagnostics/van_review.zip`，使用ZIP独占创建避免覆盖，并检查所有引用文件位于本次报告目录内。ZIP只含本次明确列出的报告及抽样PNG，不含模型权重、完整数据集或其他项目文件。助手尚未创建该服务器ZIP或收到实际图片。
 - 本轮本地只更新CLAUDE.md/WORKLOG.md并记录上述用户结果，未改工具、模型、训练/评估代码或配置；未重复运行已通过的测试。文档随本轮记录提交同步到实验分支；查看和打包已有产物不依赖更新后的文档提交，服务器无需为这一步再pull。
+
+
+## van_review.zip 全量分析与12张真实图检查（2026-11-02）
+
+**输入与实际执行。** 用户提供C:/Users/bzp02/Downloads/van_review.zip（5,244,507字节）。本地检查ZIP成员路径后独占解压到聊天工作区artifacts/ccfuse_paired/review_received_2026-11-02，读取summary.json/txt、paired_targets.csv、transitions.csv、selection.csv、README及12张PNG。完整CSV有4350行、725个van、6场景；12张是四组各3例的定向子样本，不是全部72张，不用于估计总体比例。原ZIP/提取输入只读，未上传数据到Git、未SSH、未调用模型或GPU。
+
+**全量复核。** 各场景TP、共同错类及转移覆盖与summary一致。工作区analyze_received.mjs保存可重做分析，quant_analysis.json保存定义、分布和SHA256；源文件hash前后不变。根代理用独立csv读取再核验4350/725/289/86、跨阈值joint TP、Full候选中位数和面积分组。paired_targets.csv SHA256为66e15fa408603d36fbf7a296d0b797374b72a199a6e7d27169f05475add9364e。这只核对收到的产物，不补足原预测的历史字节哈希或权重身份。
+
+以下主工作点为conf=0.25、匹配IoU=0.5：
+
+- CMFC→Full新增86个TP，在conf=0.05时两组全部为TP；86个CMFC的几何合格van候选分数均在[0.05,0.25)，Full均≥0.25。最高分van候选的分数中位0.1708→0.3167，IoU中位0.8539→0.8708。原来已有符合该IoU的候选，不应解释成新发现86个未定位目标；仍不证明只是校准或模块即时机制。
+- 反向丢失24个TP全部也是Full van候选低于0.25、CMFC≥0.25；23个在0.05时两组都为TP，剩余1个Full van分数低于0.05。
+- 三组共同van→car为289/725=39.9%；Add/CMFC/Full有合格van候选289/288/289个，凡同时存在car和van候选，car分数均更高。van分数中位0.0264/0.0318/0.0198，car中位0.7949/0.7568/0.7803；Full的289个van中207个<0.05、82个在[0.05,0.25)。这些是各类最高分NMS后候选，未必为实际匹配框，也不能拆成内部分类概率。
+- Full的281个TP中，41个（14.6%）car候选分数高于van；新增86个中18个（20.9%）。TP-first诊断的TP不意味着van分数已赢过所有car候选。
+- 0.25时共同289个与0.05时共同153个的精确交集为148；分别独有141和5个。至此用实际GT身份补足此前的集合边界。
+- 按全部725个van的归一化GT面积四分位，三组共同van→car为125/182、96/181、58/181、10/181，即68.7%、53.0%、32.0%、5.5%。共同289个面积中位占图0.446%，其他436个0.821%。这是尺度相关性，不证明类别错误或扩大输入必有改善。
+
+**真实图目检。** 本地主代理与图像审阅代理均检查全部12张PNG。00974#6、00827#38、01167#19均为暗RGB停车场小车，IR轮廓可见，三组car框已覆盖目标而van分数很低。00683#9、00762#5、00783#1为长封闭货厢/驾驶室车辆，GT仍为van，模型在van/truck/freight car间分歧，需按数据集定义追溯。00689#1为边界截断目标，形态判断受限。00942#19的Add van候选0.240、CMFC0.203、Full0.370；01170#4的CMFC0.252/Full0.241、01300#1的Full0.242体现阈值邻近变化。00807#21 Full TP仍有更高分car候选。图中未见贯穿样本的统一100像素裁边错误或明显RGB/IR平移，但不能据12图排除细微配准问题，不能自行改GT。
+
+**标签和实现审计。** tools/prepare_dronevehicle.py与data YAML均固定car/truck/freight car/bus/van；NAME_MAP保持car/van，未发现索引交换。默认读取IR XML，同一文本写入两模态，裁白边100、OBB转HBB、裁剪与最小尺寸过滤会改变行号对应；需按转换后坐标匹配原对象，不能把YOLO #1当XML第二个对象。原DroneVehicle论文只列五类及示例，没有找到可操作的van/truck细分定义；作者将van与car外观相似列为其van增益较小的可能原因（https://arxiv.org/pdf/2003.02437，第11页讨论）。该外部解释不证明本项目错误原因；官方repo第三方issue疑问也不能当作作者承认标错。
+
+另发现的独立因素，均未修改：ComputeLoss不读取model.class_weights，cls_pw是标量；当前cls=0.5在5类、3层下会缩放为0.03125，不能仅凭绝对数值认定有错。--image-weights路径引用dataset.n/indices，与双流dataset属性及非mosaic索引链路不兼容，不直接建议启用。单卡factory未指定shuffle；工作区probe_sequential_sampler.py从当前源码AST提取factory/InfiniteDataLoader/_RepeatSampler，使用torch2.5.1+cu124真实DataLoader与17个合成配对ID，在rank=-1、image_weights=False、rect=False、batch12、workers0下验证SequentialSampler、两epoch均0..16、batch[12,5]、RGB/IR对应一致、CUDA未初始化。证据probe_sequential_sampler_result.json；不是服务器torch/workers8/真实增强的运行复现，不能归因当前错误。focal开关同时影响cls与obj，不是纯分类对照。
+
+**下一步与交付边界。** 优先核对上述6个代表GT的源XML及convert_stats.json。用户表示不确定是否保留原始XML，下一条交付是在~/bzp/datasets内查找00683.xml、已有压缩包和转换记录的只读命令；尚未在服务器执行。若源标签一致，可讨论仅改全局cls的受控实验（影响所有类别）或独立shuffle对照；两者都只是候选，不同轮混改，也尚未授权/启动。若源XML缺失，记录限制，不根据模型预测改val标签。完整版v2继续作参考。
+
+本轮仓库只更新CLAUDE.md/WORKLOG.md；实测与分析证据保留聊天工作区，原始数据/PNG/CSV不纳入Git。未改诊断工具、模型、训练/评估代码、配置或已有指标。起点HEAD为2876fdeb186823903225053f31535888c11a6d0d、实验分支工作区干净；文档随本轮记录提交并同步到该分支，实际结果以工具核验及最终回复为准。此检查不要求服务器为文档更新再次pull。
