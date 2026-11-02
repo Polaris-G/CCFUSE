@@ -763,8 +763,8 @@ git -C D:/project/CCFUSE fsck --full
 |---|---:|---:|---:|
 | car | -0.1 | +0.1 | +0.0 |
 | truck | -0.8 | +3.1 | +0.9 |
-| freight car | +1.1 | +2.7 | +1.8 |
-| bus | -2.1 | -1.8 | -2.2 |
+| freight car | +1.1 | +2.7 | +1.3 |
+| bus | -2.1 | -1.8 | -1.2 |
 | van | +0.0 | -3.0 | -1.4 |
 
 ### 结论与下一步
@@ -810,3 +810,87 @@ python tools/diagnose_detections.py \
 - 预期输出目录为 runs/diagnostics/cmfc_only_m_v2_b12_val；如果目录已存在，选择新的输出目录，不覆盖旧报告。运行后回传 summary.txt（命令本身也会打印该摘要）。若缺 6 列预测、输入校验失败或文件不完整，先回传错误，不自动重新推理或训练。
 - 下一步根据用户实际诊断摘要比较不同 confidence/IoU 下的 bus/van 漏检、错类与定位线索，再决定是否检查原图错例或运行其他已完成实验的同口径离线诊断。本次尚未获得任何服务器诊断结果。
 - 本轮将此前未提交的恢复/实验文档更新与上述两个工具文件一起提交到 codex/cmfc-only-v2-ablation，通过 GitHub 交付；提交和推送结果以本轮实际 Git 返回的哈希为准。没有合并 main、重训或直接连接服务器。
+
+## 新会话交接与分类差值纠正（2026-11-02）
+
+- 用户要求为新会话提供项目目标、进度、路径、数据/训练配置、已完成/待办、实验结果、问题、失败方案、下一步及不可违反要求，并明确证据来源和 Git 状态。新增根目录 CCFUSE_新会话交接_2026-11-02.md，副本保存在当前聊天工作区 artifacts/ccfuse_handoff/；同步更新 CLAUDE.md 的入口、Git 和当前状态。
+- 本地查询确认当前分支 codex/cmfc-only-v2-ablation，HEAD 1e6e4de390eac2137d7778a1d5086f6636ce5ef6（Add offline detection diagnostics and record CMFC-only results）。git ls-remote 返回远端同名分支同哈希，main 为 27b8214c5308b7d2b7ab94d5b4b71e5bedd2d4d3；写交接前工作区干净。此前诊断工具和恢复/结果文档已经上传，不能继续说它们未提交。
+- 再次核对本地权重 weights/yolov5m.pt、相邻 D:/project/datasets/DroneVehicle 不存在，仓库内未找到 PDF；恢复没有包括这些非 Git 产物。解释器 D:/Miniconda/envs/ccsfuse/python.exe 仍存在。没有重跑真实权重、GPU 或数据检查。
+- 交接区分本地核验、用户服务器日志、历史记录与推测。训练完成及独立 val 指标、服务器评估目录已经用户确认；实际 checkpoint 路径、训练目录、完整评估命令、服务器 HEAD 和离线诊断结果仍待确认。服务器命令只是已交付，不代表已执行。下一步仍由用户执行 CPU 离线诊断并回传 summary.txt，不新增训练。
+- 发现并纠正此前分类差值转录错误：原始 D:/codex/CCFUSE_本地开发交接_2026-11-02.md 的 baseline freight car AP50:95=33.8、bus=70.3。此前误用了 v3 的 freight=33.3 和 v2 的 bus=71.3，导致差值误记为 +1.8/−2.2。按用户 CMFC-only 的 35.1/69.1，正确差值为 +1.3/−1.2 个百分点；已更正上方表格。总体指标及其他分类差值不变；这是记录纠错，没有重新评估。
+- 同步纠正聊天工作区 artifacts/ccfuse_cmfc_v2/independent_val_2026-11-02.json 的派生差值与已确认评估目录、record_independent_val.py 的两项基线常量，并附纠错说明。历史脚本未重跑，旧快照保留作历史证据；不要由旧快照重新引入错误。
+- CLAUDE.md 开头“官方代码未公开”改为历史记载且本次未重新核实；其他历史论文解释、早期误差归因与未验证结构设想在新交接中标明边界。未把未运行方案列为失败实验。
+- 本次仅交接/文档和派生记录纠错，没有修改模型、训练代码或配置，没有 SSH、推理、训练、提交、推送或合并 PR。完成后的 Git 变化为修改 CLAUDE.md、WORKLOG.md，以及新增未跟踪 CCFUSE_新会话交接_2026-11-02.md；均未暂存，HEAD 保持 1e6e4de。
+- 检查范围：文档内容和原交接数字复核、代码配置静态核对、Markdown 围栏/差异/路径与最终 Git 状态；本次不重复模型或诊断单元测试。新会话提交或执行后续步骤前应再次检查实际状态。
+
+
+## 三组离线诊断回传与逐目标对照工具（2026-11-02）
+
+**来源与范围。** 用户先回传 CMFC-only v2 的诊断摘要和 JSON 提取结果，随后回传 Add 基线与完整版 v2 的诊断摘要和 conf=0.25、匹配 IoU=0.5 的完整混淆矩阵。用户提供的命令和输出确认本轮诊断读取以下服务器目录：
+
+| 角色 | 预测 TXT 目录 | 已生成诊断目录 |
+|---|---|---|
+| Add 基线 | `runs/test/exp5/labels` | `runs/diagnostics/add_baseline_val` |
+| CMFC-only v2 | `runs/test/cmfc_only_m_v2_b12_val/labels` | `runs/diagnostics/cmfc_only_m_v2_b12_val` |
+| 完整版 v2 | `runs/test/exp6/labels` | `runs/diagnostics/ccsfuse_v2_val` |
+
+以上对应关系依据交接和本轮用户执行的命令；本地没有直接读取服务器预测或 checkpoint。原始模型评估的完整启动参数、实际权重来源仍需保留既有待确认标识，不能把离线诊断命令当作原始推理参数的独立验证。
+
+三组均打印 1469 图、24490 个 GT、1468 份预测 TXT、缺失 1 份 TXT。CMFC-only 的 `missing_prediction_files` 明确为 `['01322.jpg']`，其 GT 内容尚未回传；其他两组缺失文件名尚未回传。缺失数相同不等于缺失图片相同，也不单独证明导出完整。
+
+**van 的固定阈值对照。** 下表每格为 `TP / FP / FN`，不是 AP，也不是 `test.py` 原始选定工作点的 P/R：
+
+| conf | 匹配 IoU | Add | CMFC-only v2 | 完整版 v2 |
+|---:|---:|---:|---:|---:|
+| 0.05 | 0.5 | 513 / 3474 / 212 | 496 / 2854 / 229 | 495 / 2458 / 230 |
+| 0.05 | 0.75 | 448 / 3539 / 277 | 422 / 2928 / 303 | 439 / 2514 / 286 |
+| 0.25 | 0.5 | 253 / 327 / 472 | 219 / 230 / 506 | 281 / 347 / 444 |
+| 0.25 | 0.75 | 232 / 348 / 493 | 196 / 253 / 529 | 262 / 366 / 463 |
+| 0.5 | 0.5 | 55 / 19 / 670 | 47 / 17 / 678 | 100 / 32 / 625 |
+| 0.5 | 0.75 | 54 / 20 / 671 | 41 / 23 / 684 | 95 / 37 / 630 |
+
+conf=0.25、匹配 IoU=0.5 的进一步对照：
+
+| 指标 | Add | CMFC-only v2 | 完整版 v2 |
+|---|---:|---:|---:|
+| van 精确率 / 召回率（%） | 43.6 / 34.9 | 48.8 / 30.2 | 44.7 / 38.8 |
+| 真实 van → car | 347 | 356 | 349 |
+| 真实 van → 其他错误类别（不含 car） | 79 | 93 | 54 |
+| 未匹配 van GT（混淆矩阵末行） | 46 | 57 | 41 |
+| bus TP / FP / FN | 744 / 127 / 45 | 710 / 67 / 79 | 738 / 94 / 51 |
+
+CMFC-only 的预测框分类已由用户额外提取：conf=0.05、IoU=0.5 时，van 的 2854 个 FP 中有 2728 个 `other_overlap`（95.6%），另有 classification=16、background=104、duplicate=6；conf=0.25 时 230 个 FP 中有 other_overlap=179、classification=47、background=1、duplicate=3。
+
+**解释边界与本轮决策。** 三组的 van→car 总量接近，说明这是共同的聚合错误模式，不能据此认定为 CMFC 特有故障，更不能推定是同一批 GT。完整版相对 Add 在 conf=0.25 时净多 28 个 van TP，但 van→car 总数增加 2；其他分类错总数减少 25、未匹配减少 5。这只是总量平衡，不是逐目标转移证据。CMFC-only 相对 Add 少 34 个 TP、少 97 个 FP，体现该工作点的精度/召回取舍。保留完整版 v2 为参考，进入同图同目标对照，不直接修改 loss 权重、NMS、模块或学习率。
+
+诊断先匹配同类 TP，再在剩余框中跨类配对；`classification` 不是模型内部分类头错误的直接测量。已被正确框匹配的 car 上多出的错误 van 框可以进入 `other_overlap`，所以不能把 van 行的 classification=16/47 解释为全部异类误报量。`other_overlap` 只说明存在达到候选重叠下限的 GT，不等于背景、定位错误或跨类重复中的任意单一原因。本地评估代码允许多类别预测并按类 NMS，可解释部分同位置跨类框，但真实占比尚未测得。
+
+**本轮工具实现。** 用户回复“下一步吧”，授权实现离线三模型逐目标对照。新增 `tools/compare_detections.py`、`tools/paired_detection_render.py`、`tools/test_compare_detections.py`，读取既有三份 `summary.json` 及其引用的 GT/预测路径，复用 `diagnose_detections.py` 的匹配语义。按图片相对路径和 GT 行号对齐全部 focus GT，保存六组阈值的状态、关联类别/分数/IoU、共同错误和模型成对 TP 得失；候选分数与实际匹配分开记录，不能将候选分数直接视为匹配结论。
+
+输入核验覆盖三报告的 names/数据路径/图像与 GT 计数一致性、输入重算结果与旧报告一致、缺失预测仅限已记录列表、既有输出拒绝覆盖和不写输入目录。汇总计数使用全部目标；图像按可复现抽样挑出少量目标，主工作点 conf=0.25、匹配 IoU=0.5。输出 PNG 两行 RGB/IR、四列 GT/Add/CMFC/Full，在同一目标上下文中显示匹配状态和框。没有调用模型、权重、GPU、训练或额外推理。
+
+**实际本地验证。** 在本地ccsfuse环境执行 `python tools/test_compare_detections.py`，17项测试通过。覆盖逐GT交集、同总量互换错误的gain/loss、六场景全量CSV、低于当前阈值的候选分数、无候选为空、缺TXT元数据、新缺失/报告和源输入变化拒绝、输出不覆盖、输入目录保护与输入哈希不变、八面板PNG端到端及去重。本地最初一次测试因沙箱Temp目录权限失败，切到正常临时目录后测试通过；没有把环境失败算成算法失败。实际查看了聊天工作区 `artifacts/ccfuse_paired/render_smoke/comparison.png` 合成八面板，文字、上下文裁剪和框位置可读；渲染模块另外完成空预测/边界GT、缺IR、尺寸不符和拒绝覆盖等轻量检查。验证使用合成 GT、预测和图像；没有本地真实 DroneVehicle 图片/权重/预测，不能声称已得到真实逐目标交集或真实并排图。
+
+**仅交付给用户的服务器命令。** 下列输入顺序固定为 Add、CMFC-only、完整版 v2；从已激活的 `ccsfuse` 环境和服务器仓库根目录执行。先查看 `git status --short --branch`，有意外改动时不要强制重置；正常时同步实验分支。以下命令未由助手在服务器执行：
+
+```bash
+cd ~/bzp/CCFUSE
+git status --short --branch
+git pull --ff-only origin codex/cmfc-only-v2-ablation
+git log -1 --oneline
+
+python tools/compare_detections.py \
+  --reports \
+    runs/diagnostics/add_baseline_val/summary.json \
+    runs/diagnostics/cmfc_only_m_v2_b12_val/summary.json \
+    runs/diagnostics/ccsfuse_v2_val/summary.json \
+  --output runs/diagnostics/van_three_model_comparison \
+  --expected-focus 725 \
+  --samples-per-group 10
+```
+
+命令已按最终CLI核对，`--help`正常。若输出目录已存在，读取已有报告或更换新的输出名，不覆盖历史结果。回传 `summary.txt`，并提供共同 van→car、Add 检对但 CMFC 检错、完整版检对但其他模型检错等组的若干 PNG。根据全量转移和图像证据决定下一步，不能由抽样图推断总体比例。
+
+**工作区与交付。** 起点为 `codex/cmfc-only-v2-ablation`、`1e6e4de`，远端分支相同；main为`27b8214`。保留并纳入此前CLAUDE/WORKLOG交接与数值纠错，以及未跟踪的新交接文档；后者增加快照过期提示，不改写历史。本轮新增三个工具/测试文件，修改上述三份文档；模型、train.py、test.py、数据/实验配置及原诊断工具未改。此记录与工具一起准备提交和通过GitHub交付；实际上传结果在核对后补记。没有SSH、服务器推理或训练。
+
+**来源和输出补充。** 重算核对旧报告能发现汇总不一致，旧报告无原始输入哈希，不能证明每个历史文件字节未变。新报告保存当前输入摘要；候选分数来自保存的NMS后框，不还原被抑制候选。CSV中GT行号按非空行从0开始，groups可重叠，gain/loss分别计数不能用净差代替。输出同时包含README.txt和抽样清单，实际图片在images目录；渲染错误会记入summary.json并返回非零退出码，保留已完成计数供排查。

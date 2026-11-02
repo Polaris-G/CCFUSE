@@ -2,10 +2,10 @@
 
 ## 项目目标
 复现 CCSFuse（Zhang et al., IEEE TGRS 2026, Art. no. 5400314，UAV RGB-IR 目标检测：CMFC + AFSF，基于 YOLOv5 双流）。
-官方代码未公开。详细方案见仓库根目录的 CCSFuse_复现方案.md，过程记录（含每一步的完整数据）见 WORKLOG.md。
+旧交接记载当时未找到官方代码，本次未重新核实其公开状态。详细方案见仓库根目录的 CCSFuse_复现方案.md，过程记录见 WORKLOG.md。
 当前 Windows 本地项目为 `D:\project\CCFUSE`；旧记录中的 `D:\CCSFuse` 是历史代码/数据目录，不要混用。服务器项目为 `~/bzp/CCFUSE`。
 原本地仓库 `D:\Projects\CCFUSE` 于本次会话中无法找到，已按用户要求从 GitHub 恢复到 `D:\project\CCFUSE`。
-当前状态以本文件“当前进度”和 WORKLOG.md 最新记录为准；历史结果与命令保留作追溯。论文原文未在本次本地接手中重新核对，不将历史文档中的论文解释当作已重新验证。
+新会话先读根目录 [CCFUSE_新会话交接_2026-11-02.md](CCFUSE_新会话交接_2026-11-02.md)，再读本文件“当前进度”和 WORKLOG.md 最新记录，并核对实际 Git 状态。交接区分本地核验、用户服务器日志、历史记录与推测。历史命令保留作追溯，不构成新授权；论文原文未在本次本地接手中重新核对。
 
 ## 工作约定
 
@@ -107,7 +107,7 @@ python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip
 - v5.0 主干结构：第 0 层 Focus，第 8 层 SPP；P3 / P4 / P5 来自第 4 / 6 / 9 层（均为 C3）；通道数 m 版 192 / 384 / 768，s 版 128 / 256 / 512。
 
 ### git
-- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。本轮从 `main/27b8214` 创建 `codex/cmfc-only-v2-ablation`，配置提交 `5cb0b49e35081d655e7103368f5000cd062695e1` 已推送并核对远端哈希，未合并 main。后续以实际 Git 状态为准。
+- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。当前分支 `codex/cmfc-only-v2-ablation`；本轮从 `1e6e4de` 继续实现逐目标诊断。开始前本地与远端同哈希，main 为 `27b8214`；没有合并 main。本轮保留并纳入此前 CLAUDE.md、WORKLOG.md 的交接/纠错改动和新交接文档。本轮工具和文档已完成本地检查，准备提交/推送；服务器逐目标结果尚未回传。实际 HEAD 以 `git log -1` 为准。
 - `server-linux` 是历史迁移分支记录。`.gitignore` 忽略 `__pycache__/`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`；不要提交原始数据、训练产物或权重。
 - 未跟踪、不要提交：`.vscode/`（VS Code 设置）、论文 PDF。
 - 提交使用实际本地 Git 配置。2026-11-02 已通过 `git var GIT_AUTHOR_IDENT` / `GIT_COMMITTER_IDENT` 确认身份并完成提交，不沿用旧文档里的临时姓名/邮箱覆盖配置。
@@ -294,6 +294,9 @@ Windows 本地代码检查在 `D:\project\CCFUSE` 下运行，解释器为已核
 
 ## 当前进度（2026-11-02）
 
+- 已收到 Add、CMFC-only v2、完整版 v2 三组服务器离线诊断，均为1469张 val 图、24490个GT、1468份预测TXT、缺1份。只有CMFC缺失文件名已明确为 `01322.jpg`，其他两组的缺失文件名尚未回传。用户已授权并完成本地逐目标对照工具；本地没有真实数据或服务器逐目标结果，未新增训练。旧交接文档为较早时间点快照，当前状态以本节和WORKLOG最新记录为准。
+- 数值更正：按原交接基线 freight car/bus AP50:95=33.8/70.3，CMFC-only 相对差值为 +1.3/−1.2 个百分点；此前 WORKLOG 与派生 JSON 的 +1.8/−2.2 是混列转录错误，现已更正。总体指标不变。历史快照及历史解释不自动成为当前结论。
+
 - 已收到基线、CMFC-only v2、AFSF-only、完整版 v2/v3 的独立 val 结果。前四个已有配置的数值来自 2026-11-02 交接，CMFC-only v2 来自用户本次输出；统一为 1469 张 val 图像、24490 个目标。用户将本次称为 test 结果，但这是 test.py 对 val 数据的评估，不是 8980 张 test 集。不要混入历史 test 或训练末轮指标，也不要重复启动已完成的实验。
 - 本轮已完成 **CMFC-only v2** 的训练和 val 结果回传：`models/ccsfuse/yolov5m_cmfc_add_v2.yaml` 配套 `data/hyp.ccsfuse_dronevehicle_v2.yaml`。与完整版 v2 相比，仅 27/28/29 层由 AFSF 换为 PairAdd，保持 small 初始化、std=0.001、回注 A 和学习率倍数 10。
 - 本地配置与检查已完成，代码提交 `5cb0b49` 已上传到 `codex/cmfc-only-v2-ablation`；19 项本地检查全部通过，使用真实 COCO 权重和合成数据。
@@ -312,9 +315,14 @@ Windows 本地代码检查在 `D:\project\CCFUSE` 下运行，解释器为已核
 | 完整版 v3 | 67.5 | 55.1 | 45.9 |
 
 - 当前单次结果中，CMFC-only 相对基线为 -0.4/+0.3/-0.1 个百分点，总体接近基线；完整版 v2 比 CMFC-only 高 2.3/3.5/2.5 个百分点，仍是当前最好的一组。结果提示模块可能存在配合作用，不支持直接删除 CMFC，也不能据单次实验宣称已证明协同或 CMFC 普遍无效。
-- **下一步**：用户同步本轮提交后，在服务器仓库根目录运行 `tools/diagnose_detections.py`，读取已确认的 `runs/test/cmfc_only_m_v2_b12_val/labels`；回传 `summary.txt`，再分析 bus/van 错误类型。工具仅 CPU 读取已有预测和真值，不加载模型、不推理、不训练；真实服务器诊断结果尚未回传。
+- 【用户日志】conf=0.25、匹配IoU=0.5时，van TP为253/219/281，FP为327/230/347，真实van被配为car的数量为347/356/349（Add/CMFC/full顺序）。这是共同的聚合错误模式；数量接近不代表同一批GT，也不能直接证明分类头、标注或类不平衡是根因。
+- 【本地实现】新增 `tools/compare_detections.py`、`tools/paired_detection_render.py`、`tools/test_compare_detections.py`。读取三份已有summary.json和原始GT/预测，先对完整图像全部类别匹配，再按图片相对路径和非空GT行号（从0开始）对齐focus目标。默认六阈值，全量逐目标状态、成对TP gain/loss、共同van→car均从实际GT交集计算。
+- 工具核对三组重算混淆矩阵及各类计数与旧报告一致、只接受旧报告已记录的缺TXT，保存当前输入SHA256并列出缺TXT图片的GT类别。旧报告没有原始输入内容哈希，所以同汇总数的内容变化未必被识别；也不能由TXT核实checkpoint或NMS参数。已有输出拒绝覆盖，禁止向输入目录写入。
+- 输出 `summary.txt/json`、`paired_targets.csv`、`transitions.csv`、`selection.csv`、`README.txt`及 `images/*.png`。主图工作点为conf=0.25、匹配IoU=0.5，每组固定seed抽样10个；两行RGB/IR、四列GT/Add/CMFC/full。两行叠加的是同一组融合预测，不是单模态评估。候选最高van/car分数使用全部保存框，与阈值匹配分开记录；无候选记空而非0。组可重叠，样本不代表总体比例。
+- 【本地验证】17项合成/CLI测试通过，包含同汇总但不同GT、gain/loss互抵、阈值变化、输入保护、报告不一致拒绝及八面板端到端；合成八面板已视觉检查。原诊断工具未修改；本地未运行真实DroneVehicle数据。
+- **下一步**：用户同步GitHub实验分支，运行 `tools/compare_detections.py --reports`，依次传入Add、CMFC、full三份summary.json，使用 `--expected-focus 725 --samples-per-group 10`；完整命令见WORKLOG本轮记录。回传summary.txt和共同错误/模型分歧组的部分PNG，再决定是否改数据、训练或模块；不自动重训。
 - 离线诊断默认置信度 0.05/0.25/0.5、匹配 IoU 0.5/0.75；先匹配同类 TP，再匹配剩余跨类框。输出固定阈值 TP/FP/FN、混淆矩阵、疑似定位问题及错例 CSV。该匹配口径是诊断启发式，不等于原 AP 匹配，也不要求重现原评估的 van R=22.7%；只观察已保存的 NMS 后预测。
-- 本地工具已通过 39 项合成边界/命令行测试；补充工具哈希和执行命令元数据后，5 项 CLI 检查再次通过。保持完整版 v2 作为当前参考；依据小差异做结构取舍需后续多 seed，当前不自动启动新训练。
+- 历史单模型诊断工具曾通过 39 项合成边界/命令行测试；补充工具哈希和执行命令元数据后，5 项 CLI 检查再次通过。保持完整版 v2 作为当前参考；依据小差异做结构取舍需后续多 seed，当前不自动启动新训练。
 - 口径提醒：训练末轮验证 NMS IoU 为 0.6，不能与上述独立 val 混比；现有 best.pt 按 `0.1*mAP50 + 0.9*mAP75` 选取，不代表最高 mAP50。继续保留旧实验，不顺带修改 seed、选优规则、优化器或调度。
 
 - 本地恢复：完整 Git 历史和 CMFC-only v2 配置已从 `origin/codex/cmfc-only-v2-ablation` 的 `5cb0b49` 恢复；此前未提交的两份文档更新已重建，并补记训练完成。历史检查证据保存在本地 `runs/recovery_2026-11-02/`（Git 忽略）。本次未恢复未纳入 Git 的数据集、权重、训练产物或论文，未操作服务器。此前恢复、训练完成与 val 对比的文档修改随本轮诊断工具一起纳入实验分支提交；模型、配置、train.py/test.py 与训练基线 5cb0b49 一致，新增工具独立运行。
