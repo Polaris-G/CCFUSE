@@ -894,3 +894,8 @@ python tools/compare_detections.py \
 **工作区与交付。** 起点为 `codex/cmfc-only-v2-ablation`、`1e6e4de`，远端分支相同；main为`27b8214`。保留并纳入此前CLAUDE/WORKLOG交接与数值纠错，以及未跟踪的新交接文档；后者增加快照过期提示，不改写历史。本轮新增三个工具/测试文件，修改上述三份文档；模型、train.py、test.py、数据/实验配置及原诊断工具未改。此记录与工具一起准备提交和通过GitHub交付；实际上传结果在核对后补记。没有SSH、服务器推理或训练。
 
 **来源和输出补充。** 重算核对旧报告能发现汇总不一致，旧报告无原始输入哈希，不能证明每个历史文件字节未变。新报告保存当前输入摘要；候选分数来自保存的NMS后框，不还原被抑制候选。CSV中GT行号按非空行从0开始，groups可重叠，gain/loss分别计数不能用净差代替。输出同时包含README.txt和抽样清单，实际图片在images目录；渲染错误会记入summary.json并返回非零退出码，保留已完成计数供排查。
+
+### 本轮 GitHub 交付核验
+
+- 工具及文档提交 `725f420d2048d891ac934e3e3d5b1efbf541ba61` 已成功推送到 `origin/codex/cmfc-only-v2-ablation`，并用 `git ls-remote` 核对该远端分支与本地一致；main 仍为 `27b8214c5308b7d2b7ab94d5b4b71e5bedd2d4d3`，未合并。
+- 本段及 CLAUDE 的上传状态是核验之后补记；后续文档提交不改变上述工具内容。服务器仍由用户同步和运行，未取得真实逐目标结果。

@@ -107,7 +107,7 @@ python train.py --cfg models/ccsfuse/yolov5m_ccsfuse.yaml --name ccsfuse_m_llvip
 - v5.0 主干结构：第 0 层 Focus，第 8 层 SPP；P3 / P4 / P5 来自第 4 / 6 / 9 层（均为 C3）；通道数 m 版 192 / 384 / 768，s 版 128 / 256 / 512。
 
 ### git
-- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。当前分支 `codex/cmfc-only-v2-ablation`；本轮从 `1e6e4de` 继续实现逐目标诊断。开始前本地与远端同哈希，main 为 `27b8214`；没有合并 main。本轮保留并纳入此前 CLAUDE.md、WORKLOG.md 的交接/纠错改动和新交接文档。本轮工具和文档已完成本地检查，准备提交/推送；服务器逐目标结果尚未回传。实际 HEAD 以 `git log -1` 为准。
+- GitHub 仓库：`https://github.com/Polaris-G/CCFUSE`。当前分支 `codex/cmfc-only-v2-ablation`；本轮从 `1e6e4de` 继续实现逐目标诊断。开始前本地与远端同哈希，main 为 `27b8214`；没有合并 main。本轮保留并纳入此前 CLAUDE.md、WORKLOG.md 的交接/纠错改动和新交接文档。本轮工具和文档已由提交 `725f420d2048d891ac934e3e3d5b1efbf541ba61` 上传并核对远端分支；服务器逐目标结果尚未回传。实际 HEAD 以 `git log -1` 为准。
 - `server-linux` 是历史迁移分支记录。`.gitignore` 忽略 `__pycache__/`、`datasets/`、`weights/*.pt`、`runs/`、`*.cache`；不要提交原始数据、训练产物或权重。
 - 未跟踪、不要提交：`.vscode/`（VS Code 设置）、论文 PDF。
 - 提交使用实际本地 Git 配置。2026-11-02 已通过 `git var GIT_AUTHOR_IDENT` / `GIT_COMMITTER_IDENT` 确认身份并完成提交，不沿用旧文档里的临时姓名/邮箱覆盖配置。
